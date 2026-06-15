@@ -458,6 +458,7 @@ export default function App() {
             onSave={saveActivity}
             onClose={closeSheet}
             onDelete={() => deleteSegment(sheetSeg.id)}
+            key={sheetSeg.id}
           />
         )}
 
@@ -1267,6 +1268,7 @@ function ActivitySheet(props: {
   onDelete: () => void;
 }) {
   const { seg, project, draftActivity, onActivityInput, onSetTime, onSave, onClose, onDelete } = props;
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const tc = textOn(project.color);
   const dark = tc === C.dk1;
   const muted = dark ? 'rgba(14,23,33,.6)' : 'rgba(255,255,255,.72)';
@@ -1319,13 +1321,35 @@ function ActivitySheet(props: {
               Speichern
             </button>
           </div>
-          <button
-            type="button"
-            onClick={onDelete}
-            style={{ width: '100%', marginTop: 10, padding: 11, background: 'transparent', color: C.critical, fontSize: 13, fontWeight: 700, letterSpacing: '.04em' }}
-          >
-            Eintrag löschen
-          </button>
+          {confirmDelete ? (
+            <div style={{ marginTop: 12, padding: '12px 13px', background: '#FBE9F0', border: '1px solid ' + C.critical }}>
+              <div style={{ fontSize: 13, color: C.dk1, fontWeight: 500, marginBottom: 10 }}>Diese Buchung wirklich löschen?</div>
+              <div style={{ display: 'flex', gap: 10 }}>
+                <button
+                  type="button"
+                  onClick={() => setConfirmDelete(false)}
+                  style={{ flex: 1, padding: 11, background: C.lt2, color: C.dk1, fontSize: 13, fontWeight: 700 }}
+                >
+                  Abbrechen
+                </button>
+                <button
+                  type="button"
+                  onClick={onDelete}
+                  style={{ flex: 1, padding: 11, background: C.critical, color: C.lt1, fontSize: 13, fontWeight: 700 }}
+                >
+                  Löschen
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setConfirmDelete(true)}
+              style={{ width: '100%', marginTop: 10, padding: 11, background: 'transparent', color: C.critical, fontSize: 13, fontWeight: 700, letterSpacing: '.04em' }}
+            >
+              Eintrag löschen
+            </button>
+          )}
         </div>
       </div>
     </div>
