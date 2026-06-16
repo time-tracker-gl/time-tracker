@@ -29,6 +29,15 @@ const CATEGORY_LABELS: Record<TodoCategory, string> = {
   intern: 'Intern',
 };
 
+type TaskSort = 'prio' | 'kategorie' | 'dauer' | 'fristigkeit' | 'wichtigkeit';
+const TASK_SORT_LABELS: Record<TaskSort, string> = {
+  prio: 'Priorität (Frist + Wichtigkeit)',
+  kategorie: 'Kategorie (Projekt · Akquise · Intern)',
+  dauer: 'Dauer',
+  fristigkeit: 'Fristigkeit',
+  wichtigkeit: 'Wichtigkeit',
+};
+
 interface AppState {
   projects: Project[];
   segments: Segment[];
@@ -1520,9 +1529,9 @@ function BottomNav({ tab, onSelect }: { tab: Tab; onSelect: (t: Tab) => void }) 
     </svg>
   );
   const items: [Tab, string, React.ReactNode][] = [
+    ['tasks', 'Daily Tasks', checklist],
     ['track', 'Buchungen', '▣'],
     ['report', 'Reporting', '▥'],
-    ['tasks', 'Daily Tasks', checklist],
     ['admin', 'Pflege', wrench],
   ];
   return (
@@ -1705,13 +1714,19 @@ function DailyTasksView(props: {
 }) {
   const { state: s, onAdd, onEdit, onTake } = props;
   const proj = (pid: string | null) => (pid ? s.projects.find((p) => p.id === pid) : undefined);
-  // ascending by (Fristigkeit + Wichtigkeit); ties: more urgent, then more important first
-  const sorted = [...s.todos].sort(
-    (a, b) =>
-      a.urgency + a.importance - (b.urgency + b.importance) ||
-      a.urgency - b.urgency ||
-      a.importance - b.importance,
-  );
+  const [sort, setSort] = useState<TaskSort>('prio');
+
+  const prio = (t: Todo) => t.urgency + t.importance;
+  const catRank: Record<TodoCategory, number> = { projekt: 0, akquise: 1, intern: 2 };
+  const primary: Record<TaskSort, (a: Todo, b: Todo) => number> = {
+    prio: (a, b) => prio(a) - prio(b),
+    kategorie: (a, b) => catRank[a.category] - catRank[b.category],
+    dauer: (a, b) => a.plannedMin - b.plannedMin,
+    fristigkeit: (a, b) => a.urgency - b.urgency,
+    wichtigkeit: (a, b) => a.importance - b.importance,
+  };
+  // chosen sort first, then priority (Fristigkeit + Wichtigkeit) as a stable tiebreak
+  const sorted = [...s.todos].sort((a, b) => primary[sort](a, b) || prio(a) - prio(b));
 
   return (
     <section style={{ padding: '18px 20px 36px' }}>
@@ -1724,6 +1739,25 @@ function DailyTasksView(props: {
           + Aufgabe
         </button>
       </div>
+
+      {s.todos.length > 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
+          <span style={{ fontSize: 11, letterSpacing: '.08em', textTransform: 'uppercase', color: C.greyFooter, fontWeight: 700, whiteSpace: 'nowrap' }}>
+            Sortieren
+          </span>
+          <select
+            value={sort}
+            onChange={(e) => setSort(e.target.value as TaskSort)}
+            style={{ flex: 1, minWidth: 0, border: '1px solid #D5DBDF', padding: '8px 10px', fontSize: 13, color: C.dk1, background: C.lt2, outline: 'none' }}
+          >
+            {(Object.keys(TASK_SORT_LABELS) as TaskSort[]).map((k) => (
+              <option key={k} value={k}>
+                {TASK_SORT_LABELS[k]}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
 
       {sorted.length === 0 && (
         <div style={{ fontSize: 13, color: C.muted, padding: '8px 0' }}>Noch keine Aufgaben – lege mit „+ Aufgabe" eine an.</div>
