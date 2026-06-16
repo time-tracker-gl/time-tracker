@@ -1955,14 +1955,28 @@ function TodoSheet(props: {
 
   return (
     <div onClick={onClose} style={{ position: 'absolute', inset: 0, background: 'rgba(14,23,33,.4)', zIndex: 30, display: 'flex', alignItems: 'flex-end', animation: 'tkFade .18s ease' }}>
-      <div onClick={(e) => e.stopPropagation()} style={{ width: '100%', maxHeight: '92vh', overflowY: 'auto', background: C.lt1, animation: 'tkRise .26s cubic-bezier(.16,.84,.44,1)', boxShadow: '0 -8px 30px rgba(14,23,33,.2)' }}>
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: '100%',
+          maxHeight: '92vh',
+          overflowY: 'auto',
+          background: C.lt1,
+          animation: 'tkRise .26s cubic-bezier(.16,.84,.44,1)',
+          boxShadow: '0 -8px 30px rgba(14,23,33,.2)',
+          // prevent iOS word-selection / callout from neighbouring labels while sketching
+          userSelect: 'none',
+          WebkitUserSelect: 'none',
+          WebkitTouchCallout: 'none',
+        }}
+      >
         <div style={{ background: C.accent1, padding: '14px 20px 16px' }}>
           <div style={{ width: 38, height: 4, background: 'rgba(255,255,255,.45)', margin: '0 auto 14px' }} />
           <div style={{ fontSize: 20, fontWeight: 700, color: C.lt1 }}>{initial ? 'Aufgabe bearbeiten' : 'Neue Aufgabe'}</div>
         </div>
         <div style={{ padding: '4px 20px 24px' }}>
           {label('Aufgabe')}
-          <textarea value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Was ist zu tun?" style={{ width: '100%', height: 64, resize: 'none', border: '1px solid #D5DBDF', padding: '11px 12px', fontSize: 15, lineHeight: 1.4, color: C.dk1, outline: 'none', background: C.lt2 }} />
+          <textarea value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Was ist zu tun?" style={{ width: '100%', height: 64, resize: 'none', border: '1px solid #D5DBDF', padding: '11px 12px', fontSize: 15, lineHeight: 1.4, color: C.dk1, outline: 'none', background: C.lt2, userSelect: 'text', WebkitUserSelect: 'text' }} />
 
           {label('Kategorie')}
           <div style={{ display: 'flex', gap: 8 }}>
