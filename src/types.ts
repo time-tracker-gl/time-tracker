@@ -39,6 +39,8 @@ export interface Todo {
   plannedMin: number;
   urgency: number;
   importance: number;
+  /** optional hand-drawn sketch as a PNG data URL (no recognition) */
+  drawing: string | null;
 }
 export type TileLayout = 'grid' | 'sized' | 'list';
 export type ReportPeriod = 'heute' | 'woche' | 'monat' | 'jahr' | 'zeitraum';
