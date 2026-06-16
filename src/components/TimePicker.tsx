@@ -2,7 +2,8 @@ import { WheelColumn } from './WheelColumn';
 
 const ITEM = 38;
 const HOURS = Array.from({ length: 24 }, (_, i) => i);
-const MINS = Array.from({ length: 12 }, (_, i) => i * 5);
+// 1-minute steps so real booking times (e.g. 21:48) prefill and edit exactly.
+const MINS = Array.from({ length: 60 }, (_, i) => i);
 const pad = (v: number) => String(v).padStart(2, '0');
 
 interface Props {
