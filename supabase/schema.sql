@@ -46,3 +46,28 @@ create policy "segments are owned"
   for all
   using (user_id = auth.uid())
   with check (user_id = auth.uid());
+
+-- ============================ todos ============================
+-- "Daily Tasks": things the user wants to get done today.
+create table if not exists public.todos (
+  id          text primary key,                       -- client-generated id
+  user_id     uuid not null default auth.uid() references auth.users (id) on delete cascade,
+  title       text not null,
+  category    text not null,                          -- 'projekt' | 'akquise' | 'intern'
+  project_id  text references public.projects (id) on delete set null,
+  planned_min integer not null default 0,             -- planned duration in minutes
+  urgency     integer not null default 2,             -- 0 (sofort) … 5 (später)
+  importance  integer not null default 2,             -- 0 (very high) … 4 (very low)
+  created_at  timestamptz not null default now()
+);
+
+create index if not exists todos_user_idx on public.todos (user_id, created_at);
+
+alter table public.todos enable row level security;
+
+drop policy if exists "todos are owned" on public.todos;
+create policy "todos are owned"
+  on public.todos
+  for all
+  using (user_id = auth.uid())
+  with check (user_id = auth.uid());

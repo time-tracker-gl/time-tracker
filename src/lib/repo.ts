@@ -1,5 +1,5 @@
 import { supabase } from './supabase';
-import type { DaySegment, Project, Segment } from '../types';
+import type { DaySegment, Project, Segment, Todo, TodoCategory } from '../types';
 
 /** Local (not UTC) date as YYYY-MM-DD, used as the booking "day". */
 export function localISODate(d = new Date()): string {
@@ -122,6 +122,61 @@ export async function syncSegments(day: string, segments: Segment[]): Promise<vo
         start_min: s.start,
         end_min: s.end,
         activity: s.activity,
+      })),
+    );
+    if (error) throw error;
+  }
+}
+
+interface DbTodo {
+  id: string;
+  title: string;
+  category: string;
+  project_id: string | null;
+  planned_min: number;
+  urgency: number;
+  importance: number;
+}
+
+export async function loadTodos(): Promise<Todo[]> {
+  if (!supabase) return [];
+  const { data, error } = await supabase
+    .from('todos')
+    .select('id, title, category, project_id, planned_min, urgency, importance')
+    .order('created_at', { ascending: true });
+  if (error) throw error;
+  return (data as DbTodo[]).map((t) => ({
+    id: t.id,
+    title: t.title,
+    category: t.category as TodoCategory,
+    projectId: t.project_id,
+    plannedMin: t.planned_min,
+    urgency: t.urgency,
+    importance: t.importance,
+  }));
+}
+
+/** Replace the user's todos with the given list (upsert + delete removed). */
+export async function syncTodos(todos: Todo[]): Promise<void> {
+  if (!supabase) return;
+  const { data: existing, error: selErr } = await supabase.from('todos').select('id');
+  if (selErr) throw selErr;
+  const keep = new Set(todos.map((t) => t.id));
+  const toDelete = (existing as { id: string }[]).map((r) => r.id).filter((id) => !keep.has(id));
+  if (toDelete.length) {
+    const { error } = await supabase.from('todos').delete().in('id', toDelete);
+    if (error) throw error;
+  }
+  if (todos.length) {
+    const { error } = await supabase.from('todos').upsert(
+      todos.map((t) => ({
+        id: t.id,
+        title: t.title,
+        category: t.category,
+        project_id: t.projectId,
+        planned_min: t.plannedMin,
+        urgency: t.urgency,
+        importance: t.importance,
       })),
     );
     if (error) throw error;

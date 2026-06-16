@@ -1,25 +1,38 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
-import type { DaySegment, Gap, Project, ReportPeriod, Segment, Tab, TileLayout } from './types';
+import type { DaySegment, Gap, Project, ReportPeriod, Segment, Tab, TileLayout, Todo, TodoCategory } from './types';
 import { C, PALETTE } from './theme';
 import { fmtClock, fmtDur, nowMinutes, textOn } from './lib/time';
 import { buildReport, PPM } from './lib/report';
 import { aggregate, periodRange } from './lib/aggregate';
 import { TimePicker } from './components/TimePicker';
+import { DurationPicker } from './components/DurationPicker';
 import { isSupabaseConfigured, supabase } from './lib/supabase';
 import { Login } from './components/Login';
 import {
   loadProjects,
   loadSegments,
   loadSegmentsRange,
+  loadTodos,
   localISODate,
   seedDefaultProjects,
   syncProjects,
   syncSegments,
+  syncTodos,
 } from './lib/repo';
+
+/** Daily-Task option labels (ascending order = ascending value). */
+const URGENCY_LABELS = ['sofort', 'max 2 Std', 'heute', '2 Tage', 'diese Woche', 'später'];
+const IMPORTANCE_LABELS = ['very high', 'high', 'medium', 'low', 'very low'];
+const CATEGORY_LABELS: Record<TodoCategory, string> = {
+  projekt: 'Projekt',
+  akquise: 'Akquise',
+  intern: 'Intern',
+};
 
 interface AppState {
   projects: Project[];
   segments: Segment[];
+  todos: Todo[];
   activeId: string | null;
   paused: boolean;
   pausedPid: string | null;
@@ -59,20 +72,26 @@ function isoDate(d: Date): string {
 }
 
 /** Compact signature of the persisted data, used to avoid redundant cloud writes. */
-function dataSignature(projects: Project[], segments: Segment[]): string {
+function dataSignature(projects: Project[], segments: Segment[], todos: Todo[]): string {
   return JSON.stringify({
     p: projects.map((p) => [p.id, p.code, p.name, p.color]),
     s: segments.map((s) => [s.id, s.pid, s.start, s.end, s.activity]),
+    t: todos.map((t) => [t.id, t.title, t.category, t.projectId, t.plannedMin, t.urgency, t.importance]),
   });
 }
 
-function loadPersisted(): Pick<AppState, 'projects' | 'segments' | 'tileLayout'> | null {
+function loadPersisted(): Pick<AppState, 'projects' | 'segments' | 'tileLayout' | 'todos'> | null {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return null;
     const data = JSON.parse(raw);
     if (!Array.isArray(data.projects)) return null;
-    return { projects: data.projects, segments: data.segments ?? [], tileLayout: data.tileLayout ?? 'grid' };
+    return {
+      projects: data.projects,
+      segments: data.segments ?? [],
+      tileLayout: data.tileLayout ?? 'grid',
+      todos: data.todos ?? [],
+    };
   } catch {
     return null;
   }
@@ -84,6 +103,7 @@ function initialState(): AppState {
   return {
     projects: persisted?.projects ?? SEED_PROJECTS,
     segments: persisted?.segments ?? SEED_SEGMENTS,
+    todos: persisted?.todos ?? [],
     activeId: null,
     paused: false,
     pausedPid: null,
@@ -117,6 +137,9 @@ export default function App() {
   // Bookings for the active Reporting range (Woche/Monat/Jahr/Zeitraum). Today's
   // live bookings are merged in at render time, so only past days are fetched here.
   const [reportSegments, setReportSegments] = useState<DaySegment[]>([]);
+
+  // Daily-Tasks editor sheet: null = closed, 'new' = create, Todo = edit.
+  const [todoSheet, setTodoSheet] = useState<Todo | 'new' | null>(null);
 
   const setState = (updater: Updater) =>
     setStateRaw((prev) => ({ ...prev, ...(typeof updater === 'function' ? updater(prev) : updater) }));
@@ -157,18 +180,27 @@ export default function App() {
           projects = SEED_PROJECTS;
         }
         const segments = await loadSegments(day);
+        // best-effort: the todos table may not exist yet (run schema.sql) – don't
+        // let that block loading projects/bookings.
+        let todos: Todo[] = [];
+        try {
+          todos = await loadTodos();
+        } catch (e) {
+          console.error('Supabase todos load failed (run schema.sql?)', e);
+        }
         if (!active) return;
         setStateRaw((prev) => ({
           ...prev,
           projects,
           segments,
+          todos,
           activeId: null,
           paused: false,
           pausedPid: null,
           sheetSegId: null,
           fillGap: null,
         }));
-        lastSyncRef.current = dataSignature(projects, segments);
+        lastSyncRef.current = dataSignature(projects, segments, todos);
       } catch (e) {
         console.error('Supabase load failed', e);
       } finally {
@@ -183,19 +215,24 @@ export default function App() {
   // write changes back to Supabase (debounced, skips no-op changes)
   useEffect(() => {
     if (!isSupabaseConfigured || !supabase || !userEmail || !dataLoaded) return;
-    const signature = dataSignature(state.projects, state.segments);
+    const signature = dataSignature(state.projects, state.segments, state.todos);
     if (signature === lastSyncRef.current) return;
     const t = setTimeout(async () => {
       try {
         await syncProjects(state.projects);
         await syncSegments(localISODate(), state.segments);
+        try {
+          await syncTodos(state.todos);
+        } catch (e) {
+          console.error('Supabase todos sync failed (run schema.sql?)', e);
+        }
         lastSyncRef.current = signature;
       } catch (e) {
         console.error('Supabase sync failed', e);
       }
     }, 1200);
     return () => clearTimeout(t);
-  }, [state.projects, state.segments, userEmail, dataLoaded]);
+  }, [state.projects, state.segments, state.todos, userEmail, dataLoaded]);
 
   // load the bookings for the selected aggregated report range from Supabase
   useEffect(() => {
@@ -240,17 +277,22 @@ export default function App() {
     return () => clearInterval(t);
   }, []);
 
-  // persist projects, segments and layout
+  // persist projects, segments, todos and layout
   useEffect(() => {
     try {
       localStorage.setItem(
         STORAGE_KEY,
-        JSON.stringify({ projects: state.projects, segments: state.segments, tileLayout: state.tileLayout }),
+        JSON.stringify({
+          projects: state.projects,
+          segments: state.segments,
+          todos: state.todos,
+          tileLayout: state.tileLayout,
+        }),
       );
     } catch {
       /* ignore quota / privacy-mode errors */
     }
-  }, [state.projects, state.segments, state.tileLayout]);
+  }, [state.projects, state.segments, state.todos, state.tileLayout]);
 
   const proj = (pid: string) => state.projects.find((p) => p.id === pid);
 
@@ -380,6 +422,40 @@ export default function App() {
     }));
   }
 
+  // ---------- daily tasks ----------
+  function saveTodo(todo: Todo) {
+    setState((s) => {
+      const exists = s.todos.some((t) => t.id === todo.id);
+      return {
+        todos: exists ? s.todos.map((t) => (t.id === todo.id ? todo : t)) : s.todos.concat([todo]),
+      };
+    });
+    setTodoSheet(null);
+  }
+  function deleteTodo(id: string) {
+    setState((s) => ({ todos: s.todos.filter((t) => t.id !== id) }));
+    setTodoSheet(null);
+  }
+  /** Hand a ToDo over to the Buchungen view: stop the running booking and start a
+   *  new one on the ToDo's project, with the ToDo text as the activity (FA). */
+  function takeTodoToProject(todo: Todo) {
+    if (!todo.projectId) return;
+    const pid = todo.projectId;
+    setState((s) => {
+      let segments = s.segments.slice();
+      if (s.activeId) {
+        const cur = segments.find((g) => g.id === s.activeId);
+        if (cur) {
+          if (vNow - cur.start >= 1) segments = segments.map((g) => (g.id === s.activeId ? { ...g, end: vNow } : g));
+          else segments = segments.filter((g) => g.id !== s.activeId);
+        }
+      }
+      const id = 'u' + Date.now();
+      segments.push({ id, pid, start: vNow, end: vNow, activity: todo.title });
+      return { segments, activeId: id, paused: false, pausedPid: null, sheetSegId: null, fillGap: null, tab: 'track' };
+    });
+  }
+
   function setTime(edge: 'start' | 'end', total: number) {
     setState((s) => ({
       segments: s.segments.map((g) => {
@@ -436,6 +512,7 @@ export default function App() {
   const s = state;
   const isTrack = s.tab === 'track';
   const isReport = s.tab === 'report';
+  const isTasks = s.tab === 'tasks';
   const isAdmin = s.tab === 'admin';
   const today = new Date();
   const dateText = today.toLocaleDateString('de-DE', { weekday: 'short', day: 'numeric', month: 'long' });
@@ -575,6 +652,15 @@ export default function App() {
             />
           )}
 
+          {isTasks && (
+            <DailyTasksView
+              state={s}
+              onAdd={() => setTodoSheet('new')}
+              onEdit={(t) => setTodoSheet(t)}
+              onTake={takeTodoToProject}
+            />
+          )}
+
           {isAdmin && (
             <AdminView
               state={s}
@@ -615,6 +701,18 @@ export default function App() {
             projects={s.projects}
             onPick={fillGapWith}
             onCancel={() => setState({ fillGap: null })}
+          />
+        )}
+
+        {/* Daily-Task editor */}
+        {todoSheet && (
+          <TodoSheet
+            key={todoSheet === 'new' ? 'new' : todoSheet.id}
+            initial={todoSheet === 'new' ? null : todoSheet}
+            projects={s.projects}
+            onSave={saveTodo}
+            onDelete={todoSheet === 'new' ? undefined : () => deleteTodo(todoSheet.id)}
+            onClose={() => setTodoSheet(null)}
           />
         )}
       </div>
@@ -1416,9 +1514,15 @@ function BottomNav({ tab, onSelect }: { tab: Tab; onSelect: (t: Tab) => void }) 
       <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
     </svg>
   );
+  const checklist = (
+    <svg width={19} height={19} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" style={{ display: 'block' }}>
+      <path d="M9 6h11M9 12h11M9 18h11M4 6l1 1 2-2M4 12l1 1 2-2M4 18l1 1 2-2" />
+    </svg>
+  );
   const items: [Tab, string, React.ReactNode][] = [
     ['track', 'Buchungen', '▣'],
     ['report', 'Reporting', '▥'],
+    ['tasks', 'Daily Tasks', checklist],
     ['admin', 'Pflege', wrench],
   ];
   return (
@@ -1587,6 +1691,226 @@ function GapFillSheet(props: { gap: Gap; projects: Project[]; onPick: (pid: stri
         <button type="button" onClick={onCancel} style={{ width: '100%', marginTop: 14, padding: 12, background: C.lt2, color: C.dk1, fontSize: 14, fontWeight: 700 }}>
           Abbrechen
         </button>
+      </div>
+    </div>
+  );
+}
+
+/* ======================= DAILY TASKS ======================= */
+function DailyTasksView(props: {
+  state: AppState;
+  onAdd: () => void;
+  onEdit: (t: Todo) => void;
+  onTake: (t: Todo) => void;
+}) {
+  const { state: s, onAdd, onEdit, onTake } = props;
+  const proj = (pid: string | null) => (pid ? s.projects.find((p) => p.id === pid) : undefined);
+  // ascending by (Fristigkeit + Wichtigkeit); ties: more urgent, then more important first
+  const sorted = [...s.todos].sort(
+    (a, b) =>
+      a.urgency + a.importance - (b.urgency + b.importance) ||
+      a.urgency - b.urgency ||
+      a.importance - b.importance,
+  );
+
+  return (
+    <section style={{ padding: '18px 20px 36px' }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 14, marginBottom: 16 }}>
+        <div>
+          <div style={{ fontSize: 11, letterSpacing: '.14em', textTransform: 'uppercase', color: C.greyFooter, fontWeight: 700 }}>Daily Tasks</div>
+          <div style={{ fontSize: 13, color: C.greyFooter, marginTop: 3 }}>Was möchtest du heute erledigen?</div>
+        </div>
+        <button type="button" onClick={onAdd} style={{ flex: '0 0 auto', padding: '9px 14px', background: C.accent1, color: C.lt1, fontSize: 12, fontWeight: 700, letterSpacing: '.04em', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>
+          + Aufgabe
+        </button>
+      </div>
+
+      {sorted.length === 0 && (
+        <div style={{ fontSize: 13, color: C.muted, padding: '8px 0' }}>Noch keine Aufgaben – lege mit „+ Aufgabe" eine an.</div>
+      )}
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        {sorted.map((t) => {
+          const p = proj(t.projectId);
+          return (
+            <div key={t.id} style={{ border: '1px solid #E1E5E8', background: C.lt1, padding: '12px 13px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10 }}>
+                <div style={{ fontSize: 15, fontWeight: 700, color: C.dk1, lineHeight: 1.3, minWidth: 0 }}>{t.title}</div>
+                <div style={{ flex: '0 0 auto', fontSize: 13, fontWeight: 700, color: C.accent1, fontVariantNumeric: 'tabular-nums' }}>{fmtDur(t.plannedMin)} h</div>
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
+                <TaskBadge text={CATEGORY_LABELS[t.category]} />
+                <TaskBadge text={URGENCY_LABELS[t.urgency]} />
+                <TaskBadge text={IMPORTANCE_LABELS[t.importance]} />
+                {p && <TaskBadge text={p.code} color={p.color} />}
+              </div>
+              <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+                <button
+                  type="button"
+                  onClick={() => onTake(t)}
+                  disabled={!t.projectId}
+                  title={t.projectId ? 'Buchung auf diesem Projekt starten' : 'Erst ein Projekt auswählen'}
+                  style={{
+                    flex: '1 1 0',
+                    padding: '9px 8px',
+                    fontSize: 12,
+                    fontWeight: 700,
+                    letterSpacing: '.04em',
+                    whiteSpace: 'nowrap',
+                    border: '1px solid ' + (t.projectId ? C.accent1 : '#D5DBDF'),
+                    color: t.projectId ? C.lt1 : '#B9C4CB',
+                    background: t.projectId ? C.accent1 : '#F7F8F9',
+                    cursor: t.projectId ? 'pointer' : 'default',
+                  }}
+                >
+                  In Projektsicht
+                </button>
+                <button type="button" onClick={() => onEdit(t)} style={{ flex: '0 0 auto', padding: '9px 14px', fontSize: 12, fontWeight: 700, border: '1px solid #D5DBDF', background: C.lt1, color: C.dk1 }}>
+                  Bearbeiten
+                </button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function TaskBadge({ text, color }: { text: string; color?: string }) {
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 700, color: C.greyFooter, background: C.lt2, padding: '3px 8px' }}>
+      {color && <span style={{ width: 8, height: 8, background: color, flex: '0 0 auto' }} />}
+      {text}
+    </span>
+  );
+}
+
+function TaskPill({ text, on, onClick, grow }: { text: string; on: boolean; onClick: () => void; grow?: boolean }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      style={{
+        flex: grow ? '1 1 0' : '0 0 auto',
+        padding: '8px 12px',
+        fontSize: 12,
+        fontWeight: 700,
+        whiteSpace: 'nowrap',
+        border: '1px solid ' + (on ? C.accent1 : '#D5DBDF'),
+        color: on ? C.lt1 : '#5E7184',
+        background: on ? C.accent1 : C.lt1,
+        cursor: 'pointer',
+      }}
+    >
+      {text}
+    </button>
+  );
+}
+
+/* ======================= TASK EDITOR ======================= */
+function TodoSheet(props: {
+  initial: Todo | null;
+  projects: Project[];
+  onSave: (t: Todo) => void;
+  onDelete?: () => void;
+  onClose: () => void;
+}) {
+  const { initial, projects, onSave, onDelete, onClose } = props;
+  const [title, setTitle] = useState(initial?.title ?? '');
+  const [category, setCategory] = useState<TodoCategory>(initial?.category ?? 'projekt');
+  const [projectId, setProjectId] = useState<string | null>(initial?.projectId ?? null);
+  const [plannedMin, setPlannedMin] = useState(initial?.plannedMin ?? 30);
+  const [urgency, setUrgency] = useState(initial?.urgency ?? 2);
+  const [importance, setImportance] = useState(initial?.importance ?? 2);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const canSave = title.trim().length > 0;
+
+  function save() {
+    if (!canSave) return;
+    onSave({
+      id: initial?.id ?? 't' + Date.now(),
+      title: title.trim(),
+      category,
+      projectId,
+      plannedMin,
+      urgency,
+      importance,
+    });
+  }
+
+  const label = (txt: string) => (
+    <div style={{ fontSize: 11, letterSpacing: '.12em', textTransform: 'uppercase', color: C.greyFooter, fontWeight: 700, margin: '16px 0 8px' }}>{txt}</div>
+  );
+
+  return (
+    <div onClick={onClose} style={{ position: 'absolute', inset: 0, background: 'rgba(14,23,33,.4)', zIndex: 30, display: 'flex', alignItems: 'flex-end', animation: 'tkFade .18s ease' }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ width: '100%', maxHeight: '92vh', overflowY: 'auto', background: C.lt1, animation: 'tkRise .26s cubic-bezier(.16,.84,.44,1)', boxShadow: '0 -8px 30px rgba(14,23,33,.2)' }}>
+        <div style={{ background: C.accent1, padding: '14px 20px 16px' }}>
+          <div style={{ width: 38, height: 4, background: 'rgba(255,255,255,.45)', margin: '0 auto 14px' }} />
+          <div style={{ fontSize: 20, fontWeight: 700, color: C.lt1 }}>{initial ? 'Aufgabe bearbeiten' : 'Neue Aufgabe'}</div>
+        </div>
+        <div style={{ padding: '4px 20px 24px' }}>
+          {label('Aufgabe')}
+          <textarea value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Was ist zu tun?" style={{ width: '100%', height: 64, resize: 'none', border: '1px solid #D5DBDF', padding: '11px 12px', fontSize: 15, lineHeight: 1.4, color: C.dk1, outline: 'none', background: C.lt2 }} />
+
+          {label('Kategorie')}
+          <div style={{ display: 'flex', gap: 8 }}>
+            {(Object.keys(CATEGORY_LABELS) as TodoCategory[]).map((c) => (
+              <TaskPill key={c} text={CATEGORY_LABELS[c]} on={category === c} onClick={() => setCategory(c)} grow />
+            ))}
+          </div>
+
+          {label('Projekt (optional)')}
+          <select value={projectId ?? ''} onChange={(e) => setProjectId(e.target.value || null)} style={{ width: '100%', border: '1px solid #D5DBDF', padding: '11px 12px', fontSize: 14, color: C.dk1, background: C.lt2, outline: 'none' }}>
+            <option value="">— keins —</option>
+            {projects.map((p) => (
+              <option key={p.id} value={p.id}>{p.code} · {p.name}</option>
+            ))}
+          </select>
+
+          {label('Geplante Dauer')}
+          <div style={{ display: 'flex', justifyContent: 'center' }}>
+            <div style={{ width: '62%' }}>
+              <DurationPicker total={plannedMin} color={C.accent1} onChange={setPlannedMin} />
+            </div>
+          </div>
+          <div style={{ textAlign: 'center', fontSize: 12, color: C.greyFooter, marginTop: 8 }}>
+            Geplant <span style={{ fontWeight: 700, color: C.dk1 }}>{fmtDur(plannedMin)} h</span> &nbsp;·&nbsp; Räder zum Einstellen wischen
+          </div>
+
+          {label('Fristigkeit')}
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            {URGENCY_LABELS.map((u, i) => (
+              <TaskPill key={u} text={u} on={urgency === i} onClick={() => setUrgency(i)} />
+            ))}
+          </div>
+
+          {label('Wichtigkeit')}
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            {IMPORTANCE_LABELS.map((w, i) => (
+              <TaskPill key={w} text={w} on={importance === i} onClick={() => setImportance(i)} />
+            ))}
+          </div>
+
+          <div style={{ display: 'flex', gap: 10, marginTop: 22 }}>
+            <button type="button" onClick={onClose} style={{ flex: 1, padding: 13, background: C.lt2, color: C.dk1, fontSize: 14, fontWeight: 700 }}>Abbrechen</button>
+            <button type="button" onClick={save} disabled={!canSave} style={{ flex: 2, padding: 13, background: canSave ? C.accent1 : '#C7CFD4', color: C.lt1, fontSize: 14, fontWeight: 700, cursor: canSave ? 'pointer' : 'not-allowed' }}>Speichern</button>
+          </div>
+
+          {onDelete &&
+            (confirmDelete ? (
+              <div style={{ marginTop: 12, padding: '12px 13px', background: '#FBE9F0', border: '1px solid ' + C.critical }}>
+                <div style={{ fontSize: 13, color: C.dk1, fontWeight: 500, marginBottom: 10 }}>Diese Aufgabe wirklich löschen?</div>
+                <div style={{ display: 'flex', gap: 10 }}>
+                  <button type="button" onClick={() => setConfirmDelete(false)} style={{ flex: 1, padding: 11, background: C.lt2, color: C.dk1, fontSize: 13, fontWeight: 700 }}>Abbrechen</button>
+                  <button type="button" onClick={onDelete} style={{ flex: 1, padding: 11, background: C.critical, color: C.lt1, fontSize: 13, fontWeight: 700 }}>Löschen</button>
+                </div>
+              </div>
+            ) : (
+              <button type="button" onClick={() => setConfirmDelete(true)} style={{ width: '100%', marginTop: 10, padding: 11, background: 'transparent', color: C.critical, fontSize: 13, fontWeight: 700 }}>Aufgabe löschen</button>
+            ))}
+        </div>
       </div>
     </div>
   );
