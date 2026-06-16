@@ -29,14 +29,6 @@ const CATEGORY_LABELS: Record<TodoCategory, string> = {
   intern: 'Intern',
 };
 
-type TaskSort = 'prio' | 'kategorie' | 'dauer' | 'fristigkeit' | 'wichtigkeit';
-const TASK_SORT_LABELS: Record<TaskSort, string> = {
-  prio: 'Priorität (Frist + Wichtigkeit)',
-  kategorie: 'Kategorie (Projekt · Akquise · Intern)',
-  dauer: 'Dauer',
-  fristigkeit: 'Fristigkeit',
-  wichtigkeit: 'Wichtigkeit',
-};
 
 interface AppState {
   projects: Project[];
@@ -666,7 +658,6 @@ export default function App() {
               state={s}
               onAdd={() => setTodoSheet('new')}
               onEdit={(t) => setTodoSheet(t)}
-              onTake={takeTodoToProject}
             />
           )}
 
@@ -721,6 +712,14 @@ export default function App() {
             projects={s.projects}
             onSave={saveTodo}
             onDelete={todoSheet === 'new' ? undefined : () => deleteTodo(todoSheet.id)}
+            onTake={
+              todoSheet === 'new'
+                ? undefined
+                : (t) => {
+                    takeTodoToProject(t);
+                    setTodoSheet(null);
+                  }
+            }
             onClose={() => setTodoSheet(null)}
           />
         )}
@@ -1706,31 +1705,77 @@ function GapFillSheet(props: { gap: Gap; projects: Project[]; onPick: (pid: stri
 }
 
 /* ======================= DAILY TASKS ======================= */
+type TaskSortKey = 'category' | 'title' | 'urgency' | 'importance';
+
+const taskCellStyle: CSSProperties = {
+  padding: '9px 6px',
+  fontSize: 12,
+  color: C.greyFooter,
+  verticalAlign: 'top',
+  whiteSpace: 'normal',
+  wordBreak: 'break-word',
+};
+
 function DailyTasksView(props: {
   state: AppState;
   onAdd: () => void;
   onEdit: (t: Todo) => void;
-  onTake: (t: Todo) => void;
 }) {
-  const { state: s, onAdd, onEdit, onTake } = props;
-  const proj = (pid: string | null) => (pid ? s.projects.find((p) => p.id === pid) : undefined);
-  const [sort, setSort] = useState<TaskSort>('prio');
+  const { state: s, onAdd, onEdit } = props;
+  const [sortKey, setSortKey] = useState<TaskSortKey>('urgency');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
 
-  const prio = (t: Todo) => t.urgency + t.importance;
   const catRank: Record<TodoCategory, number> = { projekt: 0, akquise: 1, intern: 2 };
-  const primary: Record<TaskSort, (a: Todo, b: Todo) => number> = {
-    prio: (a, b) => prio(a) - prio(b),
-    kategorie: (a, b) => catRank[a.category] - catRank[b.category],
-    dauer: (a, b) => a.plannedMin - b.plannedMin,
-    fristigkeit: (a, b) => a.urgency - b.urgency,
-    wichtigkeit: (a, b) => a.importance - b.importance,
+  const keyVal: Record<TaskSortKey, (t: Todo) => number | string> = {
+    category: (t) => catRank[t.category],
+    title: (t) => t.title.toLowerCase(),
+    urgency: (t) => t.urgency,
+    importance: (t) => t.importance,
   };
-  // chosen sort first, then priority (Fristigkeit + Wichtigkeit) as a stable tiebreak
-  const sorted = [...s.todos].sort((a, b) => primary[sort](a, b) || prio(a) - prio(b));
+  const sorted = [...s.todos].sort((a, b) => {
+    const va = keyVal[sortKey](a);
+    const vb = keyVal[sortKey](b);
+    let r = va < vb ? -1 : va > vb ? 1 : 0;
+    if (r === 0) r = a.urgency + a.importance - (b.urgency + b.importance); // stable tiebreak
+    return sortDir === 'asc' ? r : -r;
+  });
+
+  function clickSort(k: TaskSortKey) {
+    if (k === sortKey) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    else {
+      setSortKey(k);
+      setSortDir('asc');
+    }
+  }
+
+  const th = (label: string, k: TaskSortKey) => {
+    const on = sortKey === k;
+    return (
+      <th
+        onClick={() => clickSort(k)}
+        style={{
+          textAlign: 'left',
+          padding: '8px 6px',
+          fontSize: 10,
+          letterSpacing: '.05em',
+          textTransform: 'uppercase',
+          color: on ? C.accent1 : C.greyFooter,
+          fontWeight: 700,
+          cursor: 'pointer',
+          whiteSpace: 'nowrap',
+          borderBottom: '2px solid ' + (on ? C.accent1 : '#E1E5E8'),
+          userSelect: 'none',
+        }}
+      >
+        {label}
+        <span style={{ opacity: on ? 1 : 0.25 }}>{on ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ' ▲'}</span>
+      </th>
+    );
+  };
 
   return (
     <section style={{ padding: '18px 20px 36px' }}>
-      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 14, marginBottom: 16 }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 14, marginBottom: 14 }}>
         <div>
           <div style={{ fontSize: 11, letterSpacing: '.14em', textTransform: 'uppercase', color: C.greyFooter, fontWeight: 700 }}>Daily Tasks</div>
           <div style={{ fontSize: 13, color: C.greyFooter, marginTop: 3 }}>Was möchtest du heute erledigen?</div>
@@ -1740,83 +1785,42 @@ function DailyTasksView(props: {
         </button>
       </div>
 
-      {s.todos.length > 0 && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
-          <span style={{ fontSize: 11, letterSpacing: '.08em', textTransform: 'uppercase', color: C.greyFooter, fontWeight: 700, whiteSpace: 'nowrap' }}>
-            Sortieren
-          </span>
-          <select
-            value={sort}
-            onChange={(e) => setSort(e.target.value as TaskSort)}
-            style={{ flex: 1, minWidth: 0, border: '1px solid #D5DBDF', padding: '8px 10px', fontSize: 13, color: C.dk1, background: C.lt2, outline: 'none' }}
-          >
-            {(Object.keys(TASK_SORT_LABELS) as TaskSort[]).map((k) => (
-              <option key={k} value={k}>
-                {TASK_SORT_LABELS[k]}
-              </option>
-            ))}
-          </select>
-        </div>
-      )}
-
-      {sorted.length === 0 && (
+      {sorted.length === 0 ? (
         <div style={{ fontSize: 13, color: C.muted, padding: '8px 0' }}>Noch keine Aufgaben – lege mit „+ Aufgabe" eine an.</div>
+      ) : (
+        <>
+          <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
+            <colgroup>
+              <col style={{ width: '22%' }} />
+              <col style={{ width: '36%' }} />
+              <col style={{ width: '21%' }} />
+              <col style={{ width: '21%' }} />
+            </colgroup>
+            <thead>
+              <tr>
+                {th('Kategorie', 'category')}
+                {th('Titel', 'title')}
+                {th('Frist.', 'urgency')}
+                {th('Wicht.', 'importance')}
+              </tr>
+            </thead>
+            <tbody>
+              {sorted.map((t) => (
+                <tr key={t.id} onClick={() => onEdit(t)} style={{ cursor: 'pointer', borderBottom: '1px solid #EAEDEF' }}>
+                  <td style={taskCellStyle}>{CATEGORY_LABELS[t.category]}</td>
+                  <td style={{ ...taskCellStyle, color: C.dk1, fontWeight: 700 }}>{t.title}</td>
+                  <td style={taskCellStyle}>{URGENCY_LABELS[t.urgency]}</td>
+                  <td style={taskCellStyle}>{IMPORTANCE_LABELS[t.importance]}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div style={{ fontSize: 11, color: C.muted, marginTop: 10 }}>
+            Spaltenkopf tippen zum Sortieren · Zeile tippen zum Bearbeiten / Übernehmen.
+          </div>
+        </>
       )}
-
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-        {sorted.map((t) => {
-          const p = proj(t.projectId);
-          return (
-            <div key={t.id} style={{ border: '1px solid #E1E5E8', background: C.lt1, padding: '12px 13px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10 }}>
-                <div style={{ fontSize: 15, fontWeight: 700, color: C.dk1, lineHeight: 1.3, minWidth: 0 }}>{t.title}</div>
-                <div style={{ flex: '0 0 auto', fontSize: 13, fontWeight: 700, color: C.accent1, fontVariantNumeric: 'tabular-nums' }}>{fmtDur(t.plannedMin)} h</div>
-              </div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
-                <TaskBadge text={CATEGORY_LABELS[t.category]} />
-                <TaskBadge text={URGENCY_LABELS[t.urgency]} />
-                <TaskBadge text={IMPORTANCE_LABELS[t.importance]} />
-                {p && <TaskBadge text={p.code} color={p.color} />}
-              </div>
-              <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
-                <button
-                  type="button"
-                  onClick={() => onTake(t)}
-                  disabled={!t.projectId}
-                  title={t.projectId ? 'Buchung auf diesem Projekt starten' : 'Erst ein Projekt auswählen'}
-                  style={{
-                    flex: '1 1 0',
-                    padding: '9px 8px',
-                    fontSize: 12,
-                    fontWeight: 700,
-                    letterSpacing: '.04em',
-                    whiteSpace: 'nowrap',
-                    border: '1px solid ' + (t.projectId ? C.accent1 : '#D5DBDF'),
-                    color: t.projectId ? C.lt1 : '#B9C4CB',
-                    background: t.projectId ? C.accent1 : '#F7F8F9',
-                    cursor: t.projectId ? 'pointer' : 'default',
-                  }}
-                >
-                  In Projektsicht
-                </button>
-                <button type="button" onClick={() => onEdit(t)} style={{ flex: '0 0 auto', padding: '9px 14px', fontSize: 12, fontWeight: 700, border: '1px solid #D5DBDF', background: C.lt1, color: C.dk1 }}>
-                  Bearbeiten
-                </button>
-              </div>
-            </div>
-          );
-        })}
-      </div>
     </section>
-  );
-}
-
-function TaskBadge({ text, color }: { text: string; color?: string }) {
-  return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 700, color: C.greyFooter, background: C.lt2, padding: '3px 8px' }}>
-      {color && <span style={{ width: 8, height: 8, background: color, flex: '0 0 auto' }} />}
-      {text}
-    </span>
   );
 }
 
@@ -1848,9 +1852,10 @@ function TodoSheet(props: {
   projects: Project[];
   onSave: (t: Todo) => void;
   onDelete?: () => void;
+  onTake?: (t: Todo) => void;
   onClose: () => void;
 }) {
-  const { initial, projects, onSave, onDelete, onClose } = props;
+  const { initial, projects, onSave, onDelete, onTake, onClose } = props;
   const [title, setTitle] = useState(initial?.title ?? '');
   const [category, setCategory] = useState<TodoCategory>(initial?.category ?? 'projekt');
   const [projectId, setProjectId] = useState<string | null>(initial?.projectId ?? null);
@@ -1860,9 +1865,8 @@ function TodoSheet(props: {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const canSave = title.trim().length > 0;
 
-  function save() {
-    if (!canSave) return;
-    onSave({
+  function current(): Todo {
+    return {
       id: initial?.id ?? 't' + Date.now(),
       title: title.trim(),
       category,
@@ -1870,7 +1874,11 @@ function TodoSheet(props: {
       plannedMin,
       urgency,
       importance,
-    });
+    };
+  }
+  function save() {
+    if (!canSave) return;
+    onSave(current());
   }
 
   const label = (txt: string) => (
@@ -1931,6 +1939,29 @@ function TodoSheet(props: {
             <button type="button" onClick={onClose} style={{ flex: 1, padding: 13, background: C.lt2, color: C.dk1, fontSize: 14, fontWeight: 700 }}>Abbrechen</button>
             <button type="button" onClick={save} disabled={!canSave} style={{ flex: 2, padding: 13, background: canSave ? C.accent1 : '#C7CFD4', color: C.lt1, fontSize: 14, fontWeight: 700, cursor: canSave ? 'pointer' : 'not-allowed' }}>Speichern</button>
           </div>
+
+          {onTake && (
+            <button
+              type="button"
+              onClick={() => onTake(current())}
+              disabled={!projectId}
+              title={projectId ? 'Buchung auf diesem Projekt starten' : 'Erst ein Projekt auswählen'}
+              style={{
+                width: '100%',
+                marginTop: 10,
+                padding: 12,
+                border: '1px solid ' + (projectId ? C.accent2 : '#D5DBDF'),
+                background: C.lt1,
+                color: projectId ? C.accent2 : '#B9C4CB',
+                fontSize: 13,
+                fontWeight: 700,
+                letterSpacing: '.04em',
+                cursor: projectId ? 'pointer' : 'not-allowed',
+              }}
+            >
+              In Projektsicht übernehmen
+            </button>
+          )}
 
           {onDelete &&
             (confirmDelete ? (
