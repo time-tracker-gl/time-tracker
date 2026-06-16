@@ -1705,7 +1705,7 @@ function GapFillSheet(props: { gap: Gap; projects: Project[]; onPick: (pid: stri
 }
 
 /* ======================= DAILY TASKS ======================= */
-type TaskSortKey = 'category' | 'title' | 'urgency' | 'importance';
+type TaskSortKey = 'title' | 'dauer' | 'urgency' | 'importance' | 'prio';
 
 const taskCellStyle: CSSProperties = {
   padding: '9px 6px',
@@ -1715,6 +1715,12 @@ const taskCellStyle: CSSProperties = {
   whiteSpace: 'normal',
   wordBreak: 'break-word',
 };
+const taskNumCell: CSSProperties = {
+  ...taskCellStyle,
+  textAlign: 'right',
+  whiteSpace: 'nowrap',
+  fontVariantNumeric: 'tabular-nums',
+};
 
 function DailyTasksView(props: {
   state: AppState;
@@ -1722,23 +1728,23 @@ function DailyTasksView(props: {
   onEdit: (t: Todo) => void;
 }) {
   const { state: s, onAdd, onEdit } = props;
-  const [sortKey, setSortKey] = useState<TaskSortKey>('urgency');
+  const [sortKey, setSortKey] = useState<TaskSortKey>('prio');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
 
-  const catRank: Record<TodoCategory, number> = { projekt: 0, akquise: 1, intern: 2 };
   const keyVal: Record<TaskSortKey, (t: Todo) => number | string> = {
-    category: (t) => catRank[t.category],
     title: (t) => t.title.toLowerCase(),
+    dauer: (t) => t.plannedMin,
     urgency: (t) => t.urgency,
     importance: (t) => t.importance,
+    prio: (t) => t.urgency + t.importance,
   };
-  const sorted = [...s.todos].sort((a, b) => {
+  const cmp = (a: Todo, b: Todo) => {
     const va = keyVal[sortKey](a);
     const vb = keyVal[sortKey](b);
     let r = va < vb ? -1 : va > vb ? 1 : 0;
     if (r === 0) r = a.urgency + a.importance - (b.urgency + b.importance); // stable tiebreak
     return sortDir === 'asc' ? r : -r;
-  });
+  };
 
   function clickSort(k: TaskSortKey) {
     if (k === sortKey) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
@@ -1748,13 +1754,13 @@ function DailyTasksView(props: {
     }
   }
 
-  const th = (label: string, k: TaskSortKey) => {
+  const th = (label: string, k: TaskSortKey, align: 'left' | 'right') => {
     const on = sortKey === k;
     return (
       <th
         onClick={() => clickSort(k)}
         style={{
-          textAlign: 'left',
+          textAlign: align,
           padding: '8px 6px',
           fontSize: 10,
           letterSpacing: '.05em',
@@ -1773,9 +1779,53 @@ function DailyTasksView(props: {
     );
   };
 
+  const categoryTable = (cat: TodoCategory) => {
+    const rows = s.todos.filter((t) => t.category === cat).sort(cmp);
+    return (
+      <div key={cat} style={{ marginBottom: 22 }}>
+        <div style={{ fontSize: 11, letterSpacing: '.12em', textTransform: 'uppercase', color: C.accent1, fontWeight: 700, marginBottom: 8 }}>
+          {CATEGORY_LABELS[cat]} <span style={{ color: C.muted }}>({rows.length})</span>
+        </div>
+        {rows.length === 0 ? (
+          <div style={{ fontSize: 12, color: C.muted, padding: '2px 0 4px' }}>Keine Aufgaben.</div>
+        ) : (
+          <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
+            <colgroup>
+              <col style={{ width: '40%' }} />
+              <col style={{ width: '16%' }} />
+              <col style={{ width: '14%' }} />
+              <col style={{ width: '14%' }} />
+              <col style={{ width: '16%' }} />
+            </colgroup>
+            <thead>
+              <tr>
+                {th('Titel', 'title', 'left')}
+                {th('Dauer', 'dauer', 'right')}
+                {th('Frist', 'urgency', 'right')}
+                {th('Wicht', 'importance', 'right')}
+                {th('Prio', 'prio', 'right')}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((t) => (
+                <tr key={t.id} onClick={() => onEdit(t)} style={{ cursor: 'pointer', borderBottom: '1px solid #EAEDEF' }}>
+                  <td style={{ ...taskCellStyle, color: C.dk1, fontWeight: 700 }}>{t.title}</td>
+                  <td style={taskNumCell}>{fmtDur(t.plannedMin)}</td>
+                  <td style={taskNumCell} title={URGENCY_LABELS[t.urgency]}>{t.urgency + 1}</td>
+                  <td style={taskNumCell} title={IMPORTANCE_LABELS[t.importance]}>{t.importance + 1}</td>
+                  <td style={{ ...taskNumCell, color: C.dk1, fontWeight: 700 }}>{t.urgency + t.importance + 2}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    );
+  };
+
   return (
     <section style={{ padding: '18px 20px 36px' }}>
-      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 14, marginBottom: 14 }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 14, marginBottom: 16 }}>
         <div>
           <div style={{ fontSize: 11, letterSpacing: '.14em', textTransform: 'uppercase', color: C.greyFooter, fontWeight: 700 }}>Daily Tasks</div>
           <div style={{ fontSize: 13, color: C.greyFooter, marginTop: 3 }}>Was möchtest du heute erledigen?</div>
@@ -1785,38 +1835,13 @@ function DailyTasksView(props: {
         </button>
       </div>
 
-      {sorted.length === 0 ? (
+      {s.todos.length === 0 ? (
         <div style={{ fontSize: 13, color: C.muted, padding: '8px 0' }}>Noch keine Aufgaben – lege mit „+ Aufgabe" eine an.</div>
       ) : (
         <>
-          <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
-            <colgroup>
-              <col style={{ width: '22%' }} />
-              <col style={{ width: '36%' }} />
-              <col style={{ width: '21%' }} />
-              <col style={{ width: '21%' }} />
-            </colgroup>
-            <thead>
-              <tr>
-                {th('Kategorie', 'category')}
-                {th('Titel', 'title')}
-                {th('Frist.', 'urgency')}
-                {th('Wicht.', 'importance')}
-              </tr>
-            </thead>
-            <tbody>
-              {sorted.map((t) => (
-                <tr key={t.id} onClick={() => onEdit(t)} style={{ cursor: 'pointer', borderBottom: '1px solid #EAEDEF' }}>
-                  <td style={taskCellStyle}>{CATEGORY_LABELS[t.category]}</td>
-                  <td style={{ ...taskCellStyle, color: C.dk1, fontWeight: 700 }}>{t.title}</td>
-                  <td style={taskCellStyle}>{URGENCY_LABELS[t.urgency]}</td>
-                  <td style={taskCellStyle}>{IMPORTANCE_LABELS[t.importance]}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <div style={{ fontSize: 11, color: C.muted, marginTop: 10 }}>
-            Spaltenkopf tippen zum Sortieren · Zeile tippen zum Bearbeiten / Übernehmen.
+          {(['projekt', 'akquise', 'intern'] as TodoCategory[]).map((c) => categoryTable(c))}
+          <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>
+            Frist/Wicht: 1 = höchste (Frist 1 = sofort, Wicht 1 = very high) · Prio = Frist + Wicht · Spaltenkopf tippen zum Sortieren · Zeile tippen zum Bearbeiten.
           </div>
         </>
       )}
