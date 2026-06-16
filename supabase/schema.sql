@@ -58,8 +58,12 @@ create table if not exists public.todos (
   planned_min integer not null default 0,             -- planned duration in minutes
   urgency     integer not null default 2,             -- 0 (sofort) … 5 (später)
   importance  integer not null default 2,             -- 0 (very high) … 4 (very low)
+  drawing     text,                                    -- optional hand-drawn sketch (PNG data URL)
   created_at  timestamptz not null default now()
 );
+
+-- If the todos table already exists from an earlier version, add the column:
+alter table public.todos add column if not exists drawing text;
 
 create index if not exists todos_user_idx on public.todos (user_id, created_at);
 

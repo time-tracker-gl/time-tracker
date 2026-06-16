@@ -136,14 +136,13 @@ interface DbTodo {
   planned_min: number;
   urgency: number;
   importance: number;
+  drawing?: string | null;
 }
 
 export async function loadTodos(): Promise<Todo[]> {
   if (!supabase) return [];
-  const { data, error } = await supabase
-    .from('todos')
-    .select('id, title, category, project_id, planned_min, urgency, importance')
-    .order('created_at', { ascending: true });
+  // select('*') so an as-yet-missing `drawing` column doesn't break loading
+  const { data, error } = await supabase.from('todos').select('*').order('created_at', { ascending: true });
   if (error) throw error;
   return (data as DbTodo[]).map((t) => ({
     id: t.id,
@@ -153,6 +152,7 @@ export async function loadTodos(): Promise<Todo[]> {
     plannedMin: t.planned_min,
     urgency: t.urgency,
     importance: t.importance,
+    drawing: t.drawing ?? null,
   }));
 }
 
@@ -177,6 +177,7 @@ export async function syncTodos(todos: Todo[]): Promise<void> {
         planned_min: t.plannedMin,
         urgency: t.urgency,
         importance: t.importance,
+        drawing: t.drawing,
       })),
     );
     if (error) throw error;

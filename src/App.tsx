@@ -6,6 +6,7 @@ import { buildReport, PPM } from './lib/report';
 import { aggregate, periodRange } from './lib/aggregate';
 import { TimePicker } from './components/TimePicker';
 import { DurationPicker } from './components/DurationPicker';
+import { DrawingPad } from './components/DrawingPad';
 import { isSupabaseConfigured, supabase } from './lib/supabase';
 import { Login } from './components/Login';
 import {
@@ -1813,7 +1814,16 @@ function DailyTasksView(props: {
             <tbody>
               {rows.map((t) => (
                 <tr key={t.id} onClick={() => onEdit(t)} style={{ cursor: 'pointer', borderBottom: '1px solid #EAEDEF' }}>
-                  <td style={{ ...taskCellStyle, color: C.dk1, fontWeight: 700 }}>{t.title}</td>
+                  <td style={{ ...taskCellStyle, color: C.dk1, fontWeight: 700 }}>
+                    {t.title}
+                    {t.drawing && (
+                      <img
+                        src={t.drawing}
+                        alt="Skizze"
+                        style={{ display: 'block', marginTop: 4, maxWidth: '100%', height: 28, objectFit: 'contain', objectPosition: 'left', border: '1px solid #EAEDEF' }}
+                      />
+                    )}
+                  </td>
                   <td style={taskNumCell}>{fmtDur(t.plannedMin)}</td>
                   <td style={taskNumCell} title={URGENCY_LABELS[t.urgency]}>{t.urgency + 1}</td>
                   <td style={taskNumCell} title={IMPORTANCE_LABELS[t.importance]}>{t.importance + 1}</td>
@@ -1918,6 +1928,7 @@ function TodoSheet(props: {
   const [plannedMin, setPlannedMin] = useState(initial?.plannedMin ?? 30);
   const [urgency, setUrgency] = useState(initial?.urgency ?? 2);
   const [importance, setImportance] = useState(initial?.importance ?? 2);
+  const [drawing, setDrawing] = useState<string | null>(initial?.drawing ?? null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const canSave = title.trim().length > 0;
 
@@ -1930,6 +1941,7 @@ function TodoSheet(props: {
       plannedMin,
       urgency,
       importance,
+      drawing,
     };
   }
   function save() {
@@ -1990,6 +2002,9 @@ function TodoSheet(props: {
               <TaskPill key={w} text={w} on={importance === i} onClick={() => setImportance(i)} />
             ))}
           </div>
+
+          {label('Skizze (optional)')}
+          <DrawingPad value={drawing} onChange={setDrawing} />
 
           <div style={{ display: 'flex', gap: 10, marginTop: 22 }}>
             <button type="button" onClick={onClose} style={{ flex: 1, padding: 13, background: C.lt2, color: C.dk1, fontSize: 14, fontWeight: 700 }}>Abbrechen</button>
