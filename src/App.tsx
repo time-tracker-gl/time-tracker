@@ -5,6 +5,9 @@ import { fmtClock, fmtDur, nowMinutes, textOn } from './lib/time';
 import { buildReport, PPM } from './lib/report';
 import { aggregate } from './lib/aggregate';
 import { TimePicker } from './components/TimePicker';
+import { isSupabaseConfigured, supabase } from './lib/supabase';
+import { Login } from './components/Login';
+import { loadProjects, loadSegments, localISODate, seedDefaultProjects, syncProjects, syncSegments } from './lib/repo';
 
 interface AppState {
   projects: Project[];
@@ -45,6 +48,14 @@ const STORAGE_KEY = 'rpc-zeiterfassung-v1';
 
 function isoDate(d: Date): string {
   return d.toISOString().slice(0, 10);
+}
+
+/** Compact signature of the persisted data, used to avoid redundant cloud writes. */
+function dataSignature(projects: Project[], segments: Segment[]): string {
+  return JSON.stringify({
+    p: projects.map((p) => [p.id, p.code, p.name, p.color]),
+    s: segments.map((s) => [s.id, s.pid, s.start, s.end, s.activity]),
+  });
 }
 
 function loadPersisted(): Pick<AppState, 'projects' | 'segments' | 'tileLayout'> | null {
@@ -89,8 +100,94 @@ export default function App() {
   const [vNow, setVNow] = useState<number>(() => nowMinutes());
   const dragMoved = useRef(false);
 
+  // Cloud (Supabase) auth + sync state. In local mode these are pre-satisfied.
+  const [authReady, setAuthReady] = useState(!isSupabaseConfigured);
+  const [userEmail, setUserEmail] = useState<string | null>(null);
+  const [dataLoaded, setDataLoaded] = useState(!isSupabaseConfigured);
+  const lastSyncRef = useRef('');
+
   const setState = (updater: Updater) =>
     setStateRaw((prev) => ({ ...prev, ...(typeof updater === 'function' ? updater(prev) : updater) }));
+
+  // track the current Supabase session
+  useEffect(() => {
+    if (!isSupabaseConfigured || !supabase) return;
+    let active = true;
+    supabase.auth.getSession().then(({ data }) => {
+      if (!active) return;
+      setUserEmail(data.session?.user?.email ?? null);
+      setAuthReady(true);
+    });
+    const { data: sub } = supabase.auth.onAuthStateChange((_e, session) => {
+      setUserEmail(session?.user?.email ?? null);
+      setAuthReady(true);
+      if (!session) {
+        setDataLoaded(false);
+        lastSyncRef.current = '';
+      }
+    });
+    return () => {
+      active = false;
+      sub.subscription.unsubscribe();
+    };
+  }, []);
+
+  // load this user's projects + today's bookings after sign-in
+  useEffect(() => {
+    if (!isSupabaseConfigured || !supabase || !userEmail || dataLoaded) return;
+    let active = true;
+    (async () => {
+      try {
+        const day = localISODate();
+        let projects = await loadProjects();
+        if (projects.length === 0) {
+          await seedDefaultProjects(SEED_PROJECTS);
+          projects = SEED_PROJECTS;
+        }
+        const segments = await loadSegments(day);
+        if (!active) return;
+        setStateRaw((prev) => ({
+          ...prev,
+          projects,
+          segments,
+          activeId: null,
+          paused: false,
+          pausedPid: null,
+          sheetSegId: null,
+          fillGap: null,
+        }));
+        lastSyncRef.current = dataSignature(projects, segments);
+      } catch (e) {
+        console.error('Supabase load failed', e);
+      } finally {
+        if (active) setDataLoaded(true);
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [userEmail, dataLoaded]);
+
+  // write changes back to Supabase (debounced, skips no-op changes)
+  useEffect(() => {
+    if (!isSupabaseConfigured || !supabase || !userEmail || !dataLoaded) return;
+    const signature = dataSignature(state.projects, state.segments);
+    if (signature === lastSyncRef.current) return;
+    const t = setTimeout(async () => {
+      try {
+        await syncProjects(state.projects);
+        await syncSegments(localISODate(), state.segments);
+        lastSyncRef.current = signature;
+      } catch (e) {
+        console.error('Supabase sync failed', e);
+      }
+    }, 1200);
+    return () => clearTimeout(t);
+  }, [state.projects, state.segments, userEmail, dataLoaded]);
+
+  async function logout() {
+    if (supabase) await supabase.auth.signOut();
+  }
 
   // live clock; extend the running booking to "now" each tick (FA-07)
   useEffect(() => {
@@ -317,6 +414,10 @@ export default function App() {
   const sheetProj = sheetSeg ? proj(sheetSeg.pid) : null;
 
   // ---------- render ----------
+  if (isSupabaseConfigured && !authReady) return <LoadingScreen text="Lädt …" />;
+  if (isSupabaseConfigured && !userEmail) return <Login />;
+  if (isSupabaseConfigured && !dataLoaded) return <LoadingScreen text="Daten werden geladen …" />;
+
   return (
     <div
       style={{
@@ -440,6 +541,8 @@ export default function App() {
               onDeleteProject={deleteProject}
               onSetDraft={(field, v) => setState({ [field]: v } as Partial<AppState>)}
               onAddProject={addProject}
+              accountEmail={isSupabaseConfigured ? userEmail : null}
+              onLogout={logout}
             />
           )}
         </main>
@@ -1109,8 +1212,10 @@ function AdminView(props: {
   onDeleteProject: (pid: string) => void;
   onSetDraft: (field: 'draftCode' | 'draftName' | 'draftColor', v: string) => void;
   onAddProject: () => void;
+  accountEmail: string | null;
+  onLogout: () => void;
 }) {
-  const { state: s, totals, onCycleColor, onUpdateProject, onDeleteProject, onSetDraft, onAddProject } = props;
+  const { state: s, totals, onCycleColor, onUpdateProject, onDeleteProject, onSetDraft, onAddProject, accountEmail, onLogout } = props;
   const canAdd = !!(s.draftCode.trim() && s.draftName.trim());
 
   return (
@@ -1209,7 +1314,41 @@ function AdminView(props: {
           Projekt anlegen
         </button>
       </div>
+
+      {accountEmail && (
+        <div style={{ marginTop: 26, borderTop: '1px solid #EAEDEF', paddingTop: 16, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: 10, letterSpacing: '.1em', textTransform: 'uppercase', color: C.greyFooter, fontWeight: 700 }}>Angemeldet als</div>
+            <div style={{ fontSize: 13, color: C.dk1, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{accountEmail}</div>
+          </div>
+          <button
+            type="button"
+            onClick={onLogout}
+            style={{ flex: '0 0 auto', padding: '9px 14px', border: '1px solid #D5DBDF', background: C.lt1, color: C.accent1, fontSize: 12, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase' }}
+          >
+            Abmelden
+          </button>
+        </div>
+      )}
     </section>
+  );
+}
+
+/* ======================= LOADING ======================= */
+function LoadingScreen({ text }: { text: string }) {
+  return (
+    <div
+      style={{
+        height: '100vh',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        background: '#DDE3E7',
+        fontFamily: "'Roboto Condensed','Roboto',system-ui,sans-serif",
+      }}
+    >
+      <div style={{ fontSize: 13, letterSpacing: '.14em', textTransform: 'uppercase', color: C.greyFooter, fontWeight: 700 }}>{text}</div>
+    </div>
   );
 }
 

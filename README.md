@@ -62,11 +62,12 @@ Drei Tabs in der unteren Navigation:
 
 Aus dem Anforderungsdokument übernommen bzw. bei der Umsetzung getroffen:
 
-- **Persistenz**: Projekte und Buchungen werden lokal im Browser
-  (`localStorage`) gehalten – ein kleiner Ausbau gegenüber dem reinen
-  Sitzungs-Stand des Prototyps. Backend-Anbindung und Mehrgeräte-Sync sind
-  weiterhin offen. Das Datenmodell ist auf einen Tag ausgelegt
-  (Minuten seit Mitternacht, ohne Datum).
+- **Persistenz**: Mit Supabase angebunden – Login per Magic-Link-E-Mail,
+  Projekte und Buchungen werden pro Nutzer:in dauerhaft und geräteübergreifend
+  gespeichert (Row Level Security). Einrichtung siehe [`SUPABASE.md`](./SUPABASE.md).
+  Ohne gültige Supabase-Konfiguration fällt die App automatisch auf den lokalen
+  Modus (`localStorage`) ohne Login zurück. Das Datenmodell ist weiterhin auf
+  einen Tag ausgelegt (Buchungen mit Datum `day`; übergreifende Historie offen).
 - **Aggregierte Auswertungen** (Woche/Monat/Jahr/Zeitraum) basieren auf
   deterministischen Demo-Daten und sind noch nicht mit den realen Buchungen
   verknüpft. Nur die Tagesansicht nutzt echte Buchungsdaten.
