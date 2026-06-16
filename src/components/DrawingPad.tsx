@@ -83,7 +83,19 @@ export function DrawingPad({ value, onChange }: Props) {
         onPointerMove={move}
         onPointerUp={up}
         onPointerLeave={up}
-        style={{ width: '100%', height: 160, border: '1px solid #D5DBDF', background: '#FFFFFF', touchAction: 'none', display: 'block', cursor: 'crosshair' }}
+        onContextMenu={(e) => e.preventDefault()}
+        style={{
+          width: '100%',
+          height: 160,
+          border: '1px solid #D5DBDF',
+          background: '#FFFFFF',
+          touchAction: 'none',
+          display: 'block',
+          cursor: 'crosshair',
+          userSelect: 'none',
+          WebkitUserSelect: 'none',
+          WebkitTouchCallout: 'none',
+        }}
       />
       <button
         type="button"
