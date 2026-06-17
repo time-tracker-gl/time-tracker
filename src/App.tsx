@@ -860,6 +860,22 @@ function TrackView(props: {
             >
               {bannerProject}
             </div>
+            {running && activeSeg && activeSeg.activity.trim() !== '' && (
+              <div
+                style={{
+                  fontSize: 13,
+                  fontWeight: 500,
+                  color: bannerMutedColor,
+                  marginTop: 4,
+                  display: '-webkit-box',
+                  WebkitLineClamp: 2,
+                  WebkitBoxOrient: 'vertical',
+                  overflow: 'hidden',
+                }}
+              >
+                {activeSeg.activity}
+              </div>
+            )}
           </div>
           <div style={{ textAlign: 'right', flex: '0 0 auto' }}>
             <div style={{ fontSize: 34, fontWeight: 300, color: bannerTextColor, fontVariantNumeric: 'tabular-nums', lineHeight: 1 }}>
