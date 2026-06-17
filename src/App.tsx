@@ -99,6 +99,12 @@ function moveItem<T>(arr: T[], i: number, dir: -1 | 1): T[] {
   return next;
 }
 
+/** A finished booking still needs the activity-capture sheet only if nothing was
+ *  described yet: no description text and no checklist item with content. */
+function needsActivity(seg: Segment): boolean {
+  return seg.activity.trim() === '' && !(seg.checklist ?? []).some((c) => c.text.trim() !== '');
+}
+
 /** Three empty checklist rows for a fresh project detail view. */
 function emptyChecklist(): ChecklistItem[] {
   return [
@@ -348,10 +354,12 @@ export default function App() {
         if (cur && cur.pid === pid) return s; // already running this project
         if (cur) {
           if (vNow - cur.start >= 1) {
-            // keep the finished booking and prompt for its activity description
+            // keep the finished booking; only prompt for a description if none was entered yet
             segments = segments.map((g) => (g.id === s.activeId ? { ...g, end: vNow } : g));
-            sheetSegId = cur.id;
-            draftActivity = cur.activity || '';
+            if (needsActivity(cur)) {
+              sheetSegId = cur.id;
+              draftActivity = cur.activity || '';
+            }
           } else {
             // discard a zero-minute booking from an accidental / too-quick switch
             segments = segments.filter((g) => g.id !== s.activeId);
@@ -388,7 +396,7 @@ export default function App() {
       if (s.activeId) {
         const cur = s.segments.find((g) => g.id === s.activeId);
         segments = s.segments.map((g) => (g.id === s.activeId ? { ...g, end: vNow } : g));
-        if (cur && vNow - cur.start >= 1) {
+        if (cur && vNow - cur.start >= 1 && needsActivity(cur)) {
           sheetSegId = cur.id;
           draftActivity = cur.activity || '';
         }
@@ -563,11 +571,16 @@ export default function App() {
       return { segments, todos, activeId: null, paused: false, pausedPid: null, sheetSegId: null, fillGap: null, tab: 'tasks' };
     });
   }
-  /** "Schließen": end the active booking and return to ToDo view, but keep the ToDo. */
+  /** "Schließen": end the active booking and return to ToDo view, but keep the ToDo.
+   *  Prompt for the activity only if nothing was described yet (empty desc + no subtasks). */
   function closeBooking() {
     setState((s) => {
       if (!s.activeId) return { tab: 'tasks' };
+      const seg = s.segments.find((g) => g.id === s.activeId);
       const segments = s.segments.map((g) => (g.id === s.activeId ? { ...g, end: vNow } : g));
+      if (seg && vNow - seg.start >= 1 && needsActivity(seg)) {
+        return { segments, activeId: null, paused: false, pausedPid: null, sheetSegId: seg.id, draftActivity: seg.activity || '', fillGap: null, tab: 'tasks' };
+      }
       return { segments, activeId: null, paused: false, pausedPid: null, sheetSegId: null, fillGap: null, tab: 'tasks' };
     });
   }
