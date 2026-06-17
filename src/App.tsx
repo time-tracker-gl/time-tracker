@@ -520,6 +520,14 @@ export default function App() {
       return { segments, todos, activeId: null, paused: false, pausedPid: null, sheetSegId: null, fillGap: null, tab: 'tasks' };
     });
   }
+  /** "Schließen": end the active booking and return to ToDo view, but keep the ToDo. */
+  function closeBooking() {
+    setState((s) => {
+      if (!s.activeId) return { tab: 'tasks' };
+      const segments = s.segments.map((g) => (g.id === s.activeId ? { ...g, end: vNow } : g));
+      return { segments, activeId: null, paused: false, pausedPid: null, sheetSegId: null, fillGap: null, tab: 'tasks' };
+    });
+  }
 
   function setTime(edge: 'start' | 'end', total: number) {
     setState((s) => ({
@@ -703,6 +711,7 @@ export default function App() {
               onChecklistAdd={addChecklistRow}
               onSetPlannedEnd={setPlannedEnd}
               onComplete={completeBooking}
+              onCloseBooking={closeBooking}
             />
           )}
 
@@ -814,8 +823,9 @@ function TrackView(props: {
   onChecklistAdd: () => void;
   onSetPlannedEnd: (min: number | null) => void;
   onComplete: () => void;
+  onCloseBooking: () => void;
 }) {
-  const { state: s, running, activeSeg, bannerProj, totals, topId, onTapProject, onTogglePause, onSetLayout, onChecklistText, onChecklistToggle, onChecklistAdd, onSetPlannedEnd, onComplete } = props;
+  const { state: s, running, activeSeg, bannerProj, totals, topId, onTapProject, onTogglePause, onSetLayout, onChecklistText, onChecklistToggle, onChecklistAdd, onSetPlannedEnd, onComplete, onCloseBooking } = props;
 
   // ---- banner ----
   let bannerBg: string;
@@ -1017,13 +1027,22 @@ function TrackView(props: {
               + Aufgabe
             </button>
 
-            <button
-              type="button"
-              onClick={onComplete}
-              style={{ width: '100%', marginTop: 14, padding: 12, background: C.lt1, color: C.accent1, fontSize: 14, fontWeight: 700, letterSpacing: '.04em', textTransform: 'uppercase' }}
-            >
-              Erledigt
-            </button>
+            <div style={{ display: 'flex', gap: 10, marginTop: 14 }}>
+              <button
+                type="button"
+                onClick={onCloseBooking}
+                style={{ flex: 1, padding: 12, background: 'rgba(255,255,255,.18)', color: bannerTextColor, fontSize: 14, fontWeight: 700, letterSpacing: '.04em', textTransform: 'uppercase' }}
+              >
+                Schließen
+              </button>
+              <button
+                type="button"
+                onClick={onComplete}
+                style={{ flex: 1, padding: 12, background: C.lt1, color: C.accent1, fontSize: 14, fontWeight: 700, letterSpacing: '.04em', textTransform: 'uppercase' }}
+              >
+                Erledigt
+              </button>
+            </div>
           </div>
         )}
       </div>
