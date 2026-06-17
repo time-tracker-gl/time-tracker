@@ -1731,6 +1731,7 @@ function DailyTasksView(props: {
   onTake: (t: Todo) => void;
 }) {
   const { state: s, onAdd, onEdit, onTake } = props;
+  const provisional = s.todos.filter((t) => t.title.trim() === '');
   const [sortKey, setSortKey] = useState<TaskSortKey>('prio');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
 
@@ -1782,8 +1783,38 @@ function DailyTasksView(props: {
     );
   };
 
+  const takeButton = (t: Todo) => (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        onTake(t);
+      }}
+      disabled={!t.projectId}
+      title={t.projectId ? 'In Projektübersicht übernehmen' : 'Erst ein Projekt auswählen'}
+      style={{
+        flex: '0 0 auto',
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        width: 30,
+        height: 30,
+        padding: 0,
+        border: '1px solid ' + (t.projectId ? C.accent1 : '#E1E5E8'),
+        background: t.projectId ? C.lt1 : '#F7F8F9',
+        color: t.projectId ? C.accent1 : '#C7CFD4',
+        cursor: t.projectId ? 'pointer' : 'not-allowed',
+      }}
+    >
+      <svg width={15} height={15} viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M8 5v14l11-7z" fill="currentColor" />
+      </svg>
+    </button>
+  );
+
+  // "concrete" tasks (with a title) are grouped by category; title-less ones are provisional
   const categoryTable = (cat: TodoCategory) => {
-    const rows = s.todos.filter((t) => t.category === cat).sort(cmp);
+    const rows = s.todos.filter((t) => t.category === cat && t.title.trim() !== '').sort(cmp);
     return (
       <div key={cat} style={{ marginBottom: 22 }}>
         <div style={{ fontSize: 11, letterSpacing: '.12em', textTransform: 'uppercase', color: C.accent1, fontWeight: 700, marginBottom: 8 }}>
@@ -1828,33 +1859,7 @@ function DailyTasksView(props: {
                   <td style={taskNumCell} title={URGENCY_LABELS[t.urgency]}>{t.urgency + 1}</td>
                   <td style={taskNumCell} title={IMPORTANCE_LABELS[t.importance]}>{t.importance + 1}</td>
                   <td style={{ ...taskNumCell, color: C.dk1, fontWeight: 700 }}>{t.urgency + t.importance + 2}</td>
-                  <td style={{ ...taskCellStyle, textAlign: 'center', padding: '6px 2px' }}>
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onTake(t);
-                      }}
-                      disabled={!t.projectId}
-                      title={t.projectId ? 'In Projektübersicht übernehmen' : 'Erst ein Projekt auswählen'}
-                      style={{
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        width: 30,
-                        height: 30,
-                        padding: 0,
-                        border: '1px solid ' + (t.projectId ? C.accent1 : '#E1E5E8'),
-                        background: t.projectId ? C.lt1 : '#F7F8F9',
-                        color: t.projectId ? C.accent1 : '#C7CFD4',
-                        cursor: t.projectId ? 'pointer' : 'not-allowed',
-                      }}
-                    >
-                      <svg width={15} height={15} viewBox="0 0 24 24" aria-hidden="true">
-                        <path d="M8 5v14l11-7z" fill="currentColor" />
-                      </svg>
-                    </button>
-                  </td>
+                  <td style={{ ...taskCellStyle, textAlign: 'center', padding: '6px 2px' }}>{takeButton(t)}</td>
                 </tr>
               ))}
             </tbody>
@@ -1881,6 +1886,35 @@ function DailyTasksView(props: {
       ) : (
         <>
           {(['projekt', 'akquise', 'intern'] as TodoCategory[]).map((c) => categoryTable(c))}
+
+          {provisional.length > 0 && (
+            <div style={{ marginBottom: 22 }}>
+              <div style={{ fontSize: 11, letterSpacing: '.12em', textTransform: 'uppercase', color: C.accent1, fontWeight: 700, marginBottom: 8 }}>
+                Vorläufig <span style={{ color: C.muted }}>({provisional.length})</span>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {provisional.map((t) => (
+                  <div
+                    key={t.id}
+                    onClick={() => onEdit(t)}
+                    style={{ display: 'flex', alignItems: 'center', gap: 10, border: '1px solid #E1E5E8', background: C.lt1, padding: '8px 10px', cursor: 'pointer' }}
+                  >
+                    {t.drawing ? (
+                      <img src={t.drawing} alt="Skizze" style={{ height: 40, maxWidth: '70%', objectFit: 'contain', objectPosition: 'left' }} />
+                    ) : (
+                      <span style={{ fontSize: 13, color: C.muted }}>(ohne Titel)</span>
+                    )}
+                    <span style={{ flex: '1 1 auto' }} />
+                    {takeButton(t)}
+                  </div>
+                ))}
+              </div>
+              <div style={{ fontSize: 11, color: C.muted, marginTop: 8 }}>
+                Nur skizziert – tippen, um später zu konkretisieren (Titel, Zeit, Fristigkeit …).
+              </div>
+            </div>
+          )}
+
           <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>
             Frist/Wicht: 1 = höchste (Frist 1 = sofort, Wicht 1 = very high) · Prio = Frist + Wicht · Spaltenkopf tippen zum Sortieren · Zeile tippen zum Bearbeiten.
           </div>
@@ -1930,7 +1964,8 @@ function TodoSheet(props: {
   const [importance, setImportance] = useState(initial?.importance ?? 2);
   const [drawing, setDrawing] = useState<string | null>(initial?.drawing ?? null);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const canSave = title.trim().length > 0;
+  // a task can be saved as soon as it has a title OR a sketch (drawing-only = provisional)
+  const canSave = title.trim().length > 0 || !!drawing;
 
   function current(): Todo {
     return {
@@ -1975,8 +2010,14 @@ function TodoSheet(props: {
           <div style={{ fontSize: 20, fontWeight: 700, color: C.lt1 }}>{initial ? 'Aufgabe bearbeiten' : 'Neue Aufgabe'}</div>
         </div>
         <div style={{ padding: '4px 20px 24px' }}>
+          {label('Skizze (optional)')}
+          <DrawingPad value={drawing} onChange={setDrawing} />
+
           {label('Aufgabe')}
-          <textarea value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Was ist zu tun?" style={{ width: '100%', height: 64, resize: 'none', border: '1px solid #D5DBDF', padding: '11px 12px', fontSize: 15, lineHeight: 1.4, color: C.dk1, outline: 'none', background: C.lt2, userSelect: 'text', WebkitUserSelect: 'text' }} />
+          <textarea value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Was ist zu tun? – oder leer lassen und nur skizzieren" style={{ width: '100%', height: 64, resize: 'none', border: '1px solid #D5DBDF', padding: '11px 12px', fontSize: 15, lineHeight: 1.4, color: C.dk1, outline: 'none', background: C.lt2, userSelect: 'text', WebkitUserSelect: 'text' }} />
+          <div style={{ fontSize: 11, color: C.muted, marginTop: 6 }}>
+            Ohne Titel wird die Aufgabe als „vorläufig" gespeichert und kann später konkretisiert werden.
+          </div>
 
           {label('Kategorie')}
           <div style={{ display: 'flex', gap: 8 }}>
@@ -2016,9 +2057,6 @@ function TodoSheet(props: {
               <TaskPill key={w} text={w} on={importance === i} onClick={() => setImportance(i)} />
             ))}
           </div>
-
-          {label('Skizze (optional)')}
-          <DrawingPad value={drawing} onChange={setDrawing} />
 
           <div style={{ display: 'flex', gap: 10, marginTop: 22 }}>
             <button type="button" onClick={onClose} style={{ flex: 1, padding: 13, background: C.lt2, color: C.dk1, fontSize: 14, fontWeight: 700 }}>Abbrechen</button>
