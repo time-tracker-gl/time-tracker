@@ -10,10 +10,20 @@ body {
   margin: 0;
   padding: 0;
   background: #dde3e7;
+  height: 100vh; /* fallback */
+  height: 100dvh; /* dynamische Viewport-Höhe: berücksichtigt mobile Browser-Leisten */
+  overflow: hidden; /* kein Seiten-Scroll; gescrollt wird nur der Inhaltsbereich */
 }
 
 #root {
   height: 100vh;
+  height: 100dvh;
+}
+
+/* App-Shell exakt auf die sichtbare Höhe – Bottom-Nav bleibt immer am unteren Rand */
+.tk-vh {
+  height: 100vh;
+  height: 100dvh;
 }
 
 button {

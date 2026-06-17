@@ -147,7 +147,7 @@ function initialState(): AppState {
     draftCode: '',
     draftName: '',
     draftColor: PALETTE[0],
-    tab: 'track',
+    tab: 'tasks',
     sheetSegId: null,
     draftActivity: '',
     tileLayout: persisted?.tileLayout ?? 'grid',
@@ -643,8 +643,8 @@ export default function App() {
 
   return (
     <div
+      className="tk-vh"
       style={{
-        height: '100vh',
         display: 'flex',
         justifyContent: 'center',
         background: '#DDE3E7',
@@ -653,10 +653,10 @@ export default function App() {
       }}
     >
       <div
+        className="tk-vh"
         style={{
           width: '100%',
           maxWidth: 430,
-          height: '100vh',
           background: C.lt1,
           position: 'relative',
           display: 'flex',
