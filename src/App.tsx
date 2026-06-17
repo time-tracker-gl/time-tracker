@@ -1848,9 +1848,8 @@ function DailyTasksView(props: {
             </thead>
             <tbody>
               {rows.map((t) => (
-                <tr key={t.id} onClick={() => onEdit(t)} style={{ cursor: 'pointer', borderBottom: '1px solid #EAEDEF' }}>
+                <tr key={t.id} onClick={() => onEdit(t)} style={{ cursor: 'pointer', borderBottom: '1px solid #EAEDEF', background: t.zug ? ZUG_ROW_BG : undefined }}>
                   <td style={{ ...taskCellStyle, color: C.dk1, fontWeight: 700 }}>
-                    {t.zug && <ZugChip />}
                     {t.title}
                     {t.drawing && (
                       <img
@@ -1902,9 +1901,8 @@ function DailyTasksView(props: {
                   <div
                     key={t.id}
                     onClick={() => onEdit(t)}
-                    style={{ display: 'flex', alignItems: 'center', gap: 10, border: '1px solid #E1E5E8', background: C.lt1, padding: '8px 10px', cursor: 'pointer' }}
+                    style={{ display: 'flex', alignItems: 'center', gap: 10, border: '1px solid #E1E5E8', background: t.zug ? ZUG_ROW_BG : C.lt1, padding: '8px 10px', cursor: 'pointer' }}
                   >
-                    {t.zug && <ZugChip />}
                     {t.drawing ? (
                       <img src={t.drawing} alt="Skizze" style={{ height: 40, maxWidth: '70%', objectFit: 'contain', objectPosition: 'left' }} />
                     ) : (
@@ -1930,16 +1928,8 @@ function DailyTasksView(props: {
   );
 }
 
-function ZugChip() {
-  return (
-    <span
-      title="Im Zug erledigbar"
-      style={{ display: 'inline-block', background: '#19B3C6', color: '#FFFFFF', fontSize: 9, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase', padding: '2px 6px', marginRight: 6, verticalAlign: 'middle' }}
-    >
-      Zug
-    </span>
-  );
-}
+/** Light tint applied to a whole row when the task is "im Zug erledigbar". */
+const ZUG_ROW_BG = '#E1F5F9';
 
 function TaskPill({ text, on, onClick, grow }: { text: string; on: boolean; onClick: () => void; grow?: boolean }) {
   return (
