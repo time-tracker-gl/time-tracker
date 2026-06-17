@@ -73,6 +73,32 @@ function isoDate(d: Date): string {
   return d.toISOString().slice(0, 10);
 }
 
+/** Compact up/down reorder button (used in both checklists). */
+function moveBtnStyle(color: string, bg: string, disabled: boolean): CSSProperties {
+  return {
+    flex: '0 0 auto',
+    width: 26,
+    height: 30,
+    padding: 0,
+    fontSize: 11,
+    fontWeight: 700,
+    border: 'none',
+    background: bg,
+    color,
+    opacity: disabled ? 0.35 : 1,
+    cursor: disabled ? 'default' : 'pointer',
+  };
+}
+
+/** Swap a list item with its neighbour (returns a new array). */
+function moveItem<T>(arr: T[], i: number, dir: -1 | 1): T[] {
+  const j = i + dir;
+  if (j < 0 || j >= arr.length) return arr;
+  const next = arr.slice();
+  [next[i], next[j]] = [next[j], next[i]];
+  return next;
+}
+
 /** Three empty checklist rows for a fresh project detail view. */
 function emptyChecklist(): ChecklistItem[] {
   return [
@@ -504,6 +530,14 @@ export default function App() {
   function addChecklistRow() {
     applyActiveChecklist((cl) => cl.concat([{ text: '', done: false }]));
   }
+  function moveChecklistItem(i: number, dir: -1 | 1) {
+    applyActiveChecklist((cl) => {
+      const j = i + dir;
+      if (j < 0 || j >= cl.length) return cl;
+      [cl[i], cl[j]] = [cl[j], cl[i]];
+      return cl;
+    });
+  }
   function setPlannedEnd(min: number | null) {
     patchActiveSeg({ plannedEnd: min });
   }
@@ -706,6 +740,7 @@ export default function App() {
               onChecklistText={setChecklistText}
               onChecklistToggle={toggleChecklistItem}
               onChecklistAdd={addChecklistRow}
+              onChecklistMove={moveChecklistItem}
               onSetPlannedEnd={setPlannedEnd}
               onComplete={completeBooking}
               onCloseBooking={closeBooking}
@@ -818,11 +853,12 @@ function TrackView(props: {
   onChecklistText: (i: number, text: string) => void;
   onChecklistToggle: (i: number) => void;
   onChecklistAdd: () => void;
+  onChecklistMove: (i: number, dir: -1 | 1) => void;
   onSetPlannedEnd: (min: number | null) => void;
   onComplete: () => void;
   onCloseBooking: () => void;
 }) {
-  const { state: s, running, activeSeg, bannerProj, totals, topId, onTapProject, onTogglePause, onSetLayout, onChecklistText, onChecklistToggle, onChecklistAdd, onSetPlannedEnd, onComplete, onCloseBooking } = props;
+  const { state: s, running, activeSeg, bannerProj, totals, topId, onTapProject, onTogglePause, onSetLayout, onChecklistText, onChecklistToggle, onChecklistAdd, onChecklistMove, onSetPlannedEnd, onComplete, onCloseBooking } = props;
 
   // ---- banner ----
   let bannerBg: string;
@@ -998,8 +1034,8 @@ function TrackView(props: {
               Aufgaben
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              {(activeSeg.checklist ?? []).map((it, i) => (
-                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              {(activeSeg.checklist ?? []).map((it, i, arr) => (
+                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                   <input
                     type="checkbox"
                     checked={it.done}
@@ -1013,6 +1049,12 @@ function TrackView(props: {
                     placeholder="Subaktivität …"
                     style={{ flex: '1 1 auto', minWidth: 0, border: 'none', padding: '7px 9px', fontSize: 14, color: C.dk1, background: C.lt1, textDecoration: it.done ? 'line-through' : 'none' }}
                   />
+                  <button type="button" onClick={() => onChecklistMove(i, -1)} disabled={i === 0} style={moveBtnStyle(bannerTextColor, 'rgba(255,255,255,.18)', i === 0)}>
+                    ▲
+                  </button>
+                  <button type="button" onClick={() => onChecklistMove(i, 1)} disabled={i === arr.length - 1} style={moveBtnStyle(bannerTextColor, 'rgba(255,255,255,.18)', i === arr.length - 1)}>
+                    ▼
+                  </button>
                 </div>
               ))}
             </div>
@@ -2221,8 +2263,8 @@ function TodoSheet(props: {
 
           {label('Aktivitäten')}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            {checklist.map((it, i) => (
-              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            {checklist.map((it, i, arr) => (
+              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                 <input
                   type="checkbox"
                   checked={it.done}
@@ -2236,6 +2278,12 @@ function TodoSheet(props: {
                   placeholder="Subaktivität …"
                   style={{ flex: '1 1 auto', minWidth: 0, border: '1px solid #D5DBDF', padding: '8px 10px', fontSize: 14, color: C.dk1, background: C.lt2, outline: 'none', textDecoration: it.done ? 'line-through' : 'none', userSelect: 'text', WebkitUserSelect: 'text' }}
                 />
+                <button type="button" onClick={() => setChecklist((cl) => moveItem(cl, i, -1))} disabled={i === 0} style={moveBtnStyle(C.dk1, C.lt2, i === 0)}>
+                  ▲
+                </button>
+                <button type="button" onClick={() => setChecklist((cl) => moveItem(cl, i, 1))} disabled={i === arr.length - 1} style={moveBtnStyle(C.dk1, C.lt2, i === arr.length - 1)}>
+                  ▼
+                </button>
               </div>
             ))}
           </div>
