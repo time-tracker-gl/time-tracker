@@ -12,6 +12,15 @@ export function DrawingPad({ value, onChange }: Props) {
   const drawing = useRef(false);
   const last = useRef<{ x: number; y: number } | null>(null);
 
+  // Suppress the long-press context menu / selection callout (incl. iPad/iOS,
+  // where CSS alone isn't enough) while the sketch pad is open. A native,
+  // non-passive listener is required so preventDefault actually takes effect.
+  useEffect(() => {
+    const blockCtx = (e: Event) => e.preventDefault();
+    document.addEventListener('contextmenu', blockCtx, { passive: false });
+    return () => document.removeEventListener('contextmenu', blockCtx);
+  }, []);
+
   // size the canvas to its rendered box (crisp on hi-dpi) and paint any existing sketch
   useEffect(() => {
     const c = ref.current;
