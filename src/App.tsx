@@ -5,7 +5,6 @@ import { fmtClock, fmtDur, nowMinutes, textOn } from './lib/time';
 import { buildReport, PPM } from './lib/report';
 import { aggregate, periodRange } from './lib/aggregate';
 import { TimePicker } from './components/TimePicker';
-import { DurationPicker } from './components/DurationPicker';
 import { DrawingPad } from './components/DrawingPad';
 import { isSupabaseConfigured, supabase } from './lib/supabase';
 import { Login } from './components/Login';
@@ -22,6 +21,7 @@ import {
 } from './lib/repo';
 
 /** Daily-Task option labels (ascending order = ascending value). */
+const DURATION_OPTIONS = [2, 5, 15, 20, 30, 45, 60];
 const URGENCY_LABELS = ['sofort', 'max 2 Std', 'heute', '2 Tage', 'diese Woche', 'später'];
 const IMPORTANCE_LABELS = ['very high', 'high', 'medium', 'low', 'very low'];
 const CATEGORY_LABELS: Record<TodoCategory, string> = {
@@ -1743,6 +1743,10 @@ function DailyTasksView(props: {
     prio: (t) => t.urgency + t.importance,
   };
   const cmp = (a: Todo, b: Todo) => {
+    // 2-minute tasks are always pinned to the top, regardless of the chosen sort
+    const pa = a.plannedMin === 2 ? 0 : 1;
+    const pb = b.plannedMin === 2 ? 0 : 1;
+    if (pa !== pb) return pa - pb;
     const va = keyVal[sortKey](a);
     const vb = keyVal[sortKey](b);
     let r = va < vb ? -1 : va > vb ? 1 : 0;
@@ -1846,6 +1850,7 @@ function DailyTasksView(props: {
               {rows.map((t) => (
                 <tr key={t.id} onClick={() => onEdit(t)} style={{ cursor: 'pointer', borderBottom: '1px solid #EAEDEF' }}>
                   <td style={{ ...taskCellStyle, color: C.dk1, fontWeight: 700 }}>
+                    {t.zug && <ZugChip />}
                     {t.title}
                     {t.drawing && (
                       <img
@@ -1899,6 +1904,7 @@ function DailyTasksView(props: {
                     onClick={() => onEdit(t)}
                     style={{ display: 'flex', alignItems: 'center', gap: 10, border: '1px solid #E1E5E8', background: C.lt1, padding: '8px 10px', cursor: 'pointer' }}
                   >
+                    {t.zug && <ZugChip />}
                     {t.drawing ? (
                       <img src={t.drawing} alt="Skizze" style={{ height: 40, maxWidth: '70%', objectFit: 'contain', objectPosition: 'left' }} />
                     ) : (
@@ -1921,6 +1927,17 @@ function DailyTasksView(props: {
         </>
       )}
     </section>
+  );
+}
+
+function ZugChip() {
+  return (
+    <span
+      title="Im Zug erledigbar"
+      style={{ display: 'inline-block', background: '#19B3C6', color: '#FFFFFF', fontSize: 9, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase', padding: '2px 6px', marginRight: 6, verticalAlign: 'middle' }}
+    >
+      Zug
+    </span>
   );
 }
 
@@ -1963,6 +1980,7 @@ function TodoSheet(props: {
   const [urgency, setUrgency] = useState(initial?.urgency ?? 2);
   const [importance, setImportance] = useState(initial?.importance ?? 2);
   const [drawing, setDrawing] = useState<string | null>(initial?.drawing ?? null);
+  const [zug, setZug] = useState<boolean>(initial?.zug ?? false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   // a task can be saved as soon as it has a title OR a sketch (drawing-only = provisional)
   const canSave = title.trim().length > 0 || !!drawing;
@@ -1977,6 +1995,7 @@ function TodoSheet(props: {
       urgency,
       importance,
       drawing,
+      zug,
     };
   }
   function save() {
@@ -2013,6 +2032,15 @@ function TodoSheet(props: {
           {label('Skizze (optional)')}
           <DrawingPad value={drawing} onChange={setDrawing} />
 
+          <button
+            type="button"
+            onClick={save}
+            disabled={!canSave}
+            style={{ width: '100%', marginTop: 12, padding: 13, background: canSave ? C.accent1 : '#C7CFD4', color: C.lt1, fontSize: 14, fontWeight: 700, cursor: canSave ? 'pointer' : 'not-allowed' }}
+          >
+            Speichern
+          </button>
+
           {label('Aufgabe')}
           <textarea value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Was ist zu tun? – oder leer lassen und nur skizzieren" style={{ width: '100%', height: 64, resize: 'none', border: '1px solid #D5DBDF', padding: '11px 12px', fontSize: 15, lineHeight: 1.4, color: C.dk1, outline: 'none', background: C.lt2, userSelect: 'text', WebkitUserSelect: 'text' }} />
           <div style={{ fontSize: 11, color: C.muted, marginTop: 6 }}>
@@ -2034,14 +2062,11 @@ function TodoSheet(props: {
             ))}
           </select>
 
-          {label('Geplante Dauer')}
-          <div style={{ display: 'flex', justifyContent: 'center' }}>
-            <div style={{ width: '62%' }}>
-              <DurationPicker total={plannedMin} color={C.accent1} onChange={setPlannedMin} />
-            </div>
-          </div>
-          <div style={{ textAlign: 'center', fontSize: 12, color: C.greyFooter, marginTop: 8 }}>
-            Geplant <span style={{ fontWeight: 700, color: C.dk1 }}>{fmtDur(plannedMin)} h</span> &nbsp;·&nbsp; Räder zum Einstellen wischen
+          {label('Geplante Dauer (Minuten)')}
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            {DURATION_OPTIONS.map((m) => (
+              <TaskPill key={m} text={String(m)} on={plannedMin === m} onClick={() => setPlannedMin(m)} />
+            ))}
           </div>
 
           {label('Fristigkeit')}
@@ -2057,6 +2082,23 @@ function TodoSheet(props: {
               <TaskPill key={w} text={w} on={importance === i} onClick={() => setImportance(i)} />
             ))}
           </div>
+
+          {label('Kontext')}
+          <button
+            type="button"
+            onClick={() => setZug(!zug)}
+            style={{
+              padding: '8px 14px',
+              fontSize: 12,
+              fontWeight: 700,
+              border: '1px solid ' + (zug ? '#19B3C6' : '#D5DBDF'),
+              background: zug ? '#19B3C6' : C.lt1,
+              color: zug ? '#FFFFFF' : '#5E7184',
+              cursor: 'pointer',
+            }}
+          >
+            {zug ? '✓ ' : ''}Im Zug erledigbar
+          </button>
 
           <div style={{ display: 'flex', gap: 10, marginTop: 22 }}>
             <button type="button" onClick={onClose} style={{ flex: 1, padding: 13, background: C.lt2, color: C.dk1, fontSize: 14, fontWeight: 700 }}>Abbrechen</button>

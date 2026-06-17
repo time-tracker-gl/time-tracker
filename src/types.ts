@@ -41,6 +41,8 @@ export interface Todo {
   importance: number;
   /** optional hand-drawn sketch as a PNG data URL (no recognition) */
   drawing: string | null;
+  /** can be done "on the train" – highlighted in the lists */
+  zug: boolean;
 }
 export type TileLayout = 'grid' | 'sized' | 'list';
 export type ReportPeriod = 'heute' | 'woche' | 'monat' | 'jahr' | 'zeitraum';

@@ -137,6 +137,7 @@ interface DbTodo {
   urgency: number;
   importance: number;
   drawing?: string | null;
+  zug?: boolean | null;
 }
 
 export async function loadTodos(): Promise<Todo[]> {
@@ -153,6 +154,7 @@ export async function loadTodos(): Promise<Todo[]> {
     urgency: t.urgency,
     importance: t.importance,
     drawing: t.drawing ?? null,
+    zug: t.zug ?? false,
   }));
 }
 
@@ -178,6 +180,7 @@ export async function syncTodos(todos: Todo[]): Promise<void> {
         urgency: t.urgency,
         importance: t.importance,
         drawing: t.drawing,
+        zug: t.zug,
       })),
     );
     if (error) throw error;
