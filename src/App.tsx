@@ -103,6 +103,21 @@ function needsActivity(seg: Segment): boolean {
   return seg.activity.trim() === '' && !(seg.checklist ?? []).some((c) => c.text.trim() !== '');
 }
 
+/** Earliest start a booking may have without overlapping the booking to its left:
+ *  the latest end among other bookings that lie before `start`. */
+function leftBound(segs: Segment[], id: string, start: number): number {
+  let lo = 0;
+  for (const o of segs) if (o.id !== id && o.end <= start && o.end > lo) lo = o.end;
+  return lo;
+}
+/** Latest end a booking may have without overlapping the booking to its right:
+ *  the earliest start among other bookings that lie after `end`. */
+function rightBound(segs: Segment[], id: string, end: number): number {
+  let hi = 24 * 60;
+  for (const o of segs) if (o.id !== id && o.start >= end && o.start < hi) hi = o.start;
+  return hi;
+}
+
 /** Three empty checklist rows for a fresh project detail view. */
 function emptyChecklist(): ChecklistItem[] {
   return [
@@ -524,11 +539,11 @@ export default function App() {
   function setPlannedEnd(min: number | null) {
     patchActiveSeg({ plannedEnd: min });
   }
-  /** Edit the running booking's start time (clamped to [0, now]). */
+  /** Edit the running booking's start time (clamped to [previous booking's end, now]). */
   function setActiveStart(total: number) {
     setState((s) => ({
       segments: s.segments.map((g) =>
-        g.id === s.activeId ? { ...g, start: Math.max(0, Math.min(total, g.end)) } : g,
+        g.id === s.activeId ? { ...g, start: Math.max(leftBound(s.segments, g.id, g.start), Math.min(total, g.end)) } : g,
       ),
     }));
   }
@@ -564,8 +579,8 @@ export default function App() {
     setState((s) => ({
       segments: s.segments.map((g) => {
         if (g.id !== s.sheetSegId) return g;
-        if (edge === 'start') return { ...g, start: Math.max(0, Math.min(total, g.end - 5)) };
-        return { ...g, end: Math.min(24 * 60, Math.max(total, g.start + 5)) };
+        if (edge === 'start') return { ...g, start: Math.max(leftBound(s.segments, g.id, g.start), Math.min(total, g.end - 5)) };
+        return { ...g, end: Math.min(rightBound(s.segments, g.id, g.end), Math.max(total, g.start + 5)) };
       }),
     }));
   }
@@ -577,6 +592,9 @@ export default function App() {
     const seg0 = state.segments.find((g) => g.id === segId);
     if (!seg0) return;
     const orig = edge === 'start' ? seg0.start : seg0.end;
+    // freeze the neighbour limits at drag start so a booking can't cross into the adjacent one
+    const lower = edge === 'start' ? leftBound(state.segments, segId, seg0.start) : 0;
+    const upper = edge === 'end' ? rightBound(state.segments, segId, seg0.end) : 24 * 60;
     dragMoved.current = false;
     const move = (ev: PointerEvent) => {
       dragMoved.current = true;
@@ -585,8 +603,8 @@ export default function App() {
         ...st,
         segments: st.segments.map((g) => {
           if (g.id !== segId) return g;
-          if (edge === 'start') return { ...g, start: Math.max(0, Math.min(orig + delta, g.end - 5)) };
-          return { ...g, end: Math.min(24 * 60, Math.max(orig + delta, g.start + 5)) };
+          if (edge === 'start') return { ...g, start: Math.max(lower, Math.min(orig + delta, g.end - 5)) };
+          return { ...g, end: Math.min(upper, Math.max(orig + delta, g.start + 5)) };
         }),
       }));
     };
