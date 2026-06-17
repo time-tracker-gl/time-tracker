@@ -59,11 +59,13 @@ create table if not exists public.todos (
   urgency     integer not null default 2,             -- 0 (sofort) … 5 (später)
   importance  integer not null default 2,             -- 0 (very high) … 4 (very low)
   drawing     text,                                    -- optional hand-drawn sketch (PNG data URL)
+  zug         boolean not null default false,          -- can be done "on the train"
   created_at  timestamptz not null default now()
 );
 
--- If the todos table already exists from an earlier version, add the column:
+-- If the todos table already exists from an earlier version, add the columns:
 alter table public.todos add column if not exists drawing text;
+alter table public.todos add column if not exists zug boolean not null default false;
 
 create index if not exists todos_user_idx on public.todos (user_id, created_at);
 
