@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
-import type { DaySegment, Gap, Project, ReportPeriod, Segment, Tab, TileLayout, Todo, TodoCategory } from './types';
+import type { ChecklistItem, DaySegment, Gap, Project, ReportPeriod, Segment, Tab, TileLayout, Todo, TodoCategory } from './types';
 import { C, PALETTE } from './theme';
 import { fmtClock, fmtDur, nowMinutes, textOn } from './lib/time';
 import { buildReport, PPM } from './lib/report';
@@ -73,12 +73,21 @@ function isoDate(d: Date): string {
   return d.toISOString().slice(0, 10);
 }
 
+/** Three empty checklist rows for a fresh project detail view. */
+function emptyChecklist(): ChecklistItem[] {
+  return [
+    { text: '', done: false },
+    { text: '', done: false },
+    { text: '', done: false },
+  ];
+}
+
 /** Compact signature of the persisted data, used to avoid redundant cloud writes. */
 function dataSignature(projects: Project[], segments: Segment[], todos: Todo[]): string {
   return JSON.stringify({
     p: projects.map((p) => [p.id, p.code, p.name, p.color]),
-    s: segments.map((s) => [s.id, s.pid, s.start, s.end, s.activity]),
-    t: todos.map((t) => [t.id, t.title, t.category, t.projectId, t.plannedMin, t.urgency, t.importance]),
+    s: segments.map((s) => [s.id, s.pid, s.start, s.end, s.activity, s.plannedEnd ?? null, s.checklist ?? [], s.todoId ?? null]),
+    t: todos.map((t) => [t.id, t.title, t.category, t.projectId, t.plannedMin, t.urgency, t.importance, t.drawing, t.zug, t.archived]),
   });
 }
 
@@ -222,7 +231,11 @@ export default function App() {
     const t = setTimeout(async () => {
       try {
         await syncProjects(state.projects);
-        await syncSegments(localISODate(), state.segments);
+        try {
+          await syncSegments(localISODate(), state.segments);
+        } catch (e) {
+          console.error('Supabase segments sync failed (run schema.sql?)', e);
+        }
         try {
           await syncTodos(state.todos);
         } catch (e) {
@@ -320,7 +333,7 @@ export default function App() {
         }
       }
       const id = 'u' + Date.now();
-      segments.push({ id, pid, start: vNow, end: vNow, activity: '' });
+      segments.push({ id, pid, start: vNow, end: vNow, activity: '', plannedEnd: null, checklist: emptyChecklist(), todoId: null });
       return { segments, activeId: id, paused: false, pausedPid: null, sheetSegId, draftActivity };
     });
   }
@@ -334,7 +347,7 @@ export default function App() {
       }
       if (s.paused && s.pausedPid) {
         const id = 'u' + Date.now();
-        const segments = s.segments.concat([{ id, pid: s.pausedPid, start: vNow, end: vNow, activity: '' }]);
+        const segments = s.segments.concat([{ id, pid: s.pausedPid, start: vNow, end: vNow, activity: '', plannedEnd: null, checklist: emptyChecklist(), todoId: null }]);
         return { segments, activeId: id, paused: false, pausedPid: null };
       }
       return s;
@@ -453,8 +466,58 @@ export default function App() {
         }
       }
       const id = 'u' + Date.now();
-      segments.push({ id, pid, start: vNow, end: vNow, activity: todo.title });
+      const plannedEnd = todo.plannedMin > 0 ? Math.min(24 * 60, vNow + todo.plannedMin) : null;
+      const checklist: ChecklistItem[] = [
+        { text: todo.title, done: false },
+        { text: '', done: false },
+        { text: '', done: false },
+      ];
+      segments.push({ id, pid, start: vNow, end: vNow, activity: todo.title, plannedEnd, checklist, todoId: todo.id });
       return { segments, activeId: id, paused: false, pausedPid: null, sheetSegId: null, fillGap: null, tab: 'track' };
+    });
+  }
+
+  // ---------- project detail (active booking) ----------
+  function patchActiveSeg(patch: Partial<Segment>) {
+    setState((s) => ({ segments: s.segments.map((g) => (g.id === s.activeId ? { ...g, ...patch } : g)) }));
+  }
+  function activeChecklist(s: AppState): ChecklistItem[] {
+    const seg = s.activeId ? s.segments.find((g) => g.id === s.activeId) : null;
+    return (seg?.checklist ?? []).slice();
+  }
+  function setChecklistText(i: number, text: string) {
+    setState((s) => {
+      const cl = activeChecklist(s);
+      if (!cl[i]) return s;
+      cl[i] = { ...cl[i], text };
+      return { segments: s.segments.map((g) => (g.id === s.activeId ? { ...g, checklist: cl } : g)) };
+    });
+  }
+  function toggleChecklistItem(i: number) {
+    setState((s) => {
+      const cl = activeChecklist(s);
+      if (!cl[i]) return s;
+      cl[i] = { ...cl[i], done: !cl[i].done };
+      return { segments: s.segments.map((g) => (g.id === s.activeId ? { ...g, checklist: cl } : g)) };
+    });
+  }
+  function addChecklistRow() {
+    setState((s) => {
+      const cl = activeChecklist(s).concat([{ text: '', done: false }]);
+      return { segments: s.segments.map((g) => (g.id === s.activeId ? { ...g, checklist: cl } : g)) };
+    });
+  }
+  function setPlannedEnd(min: number | null) {
+    patchActiveSeg({ plannedEnd: min });
+  }
+  /** "Erledigt": end the active booking, archive its source ToDo, back to ToDo view. */
+  function completeBooking() {
+    setState((s) => {
+      const seg = s.activeId ? s.segments.find((g) => g.id === s.activeId) : null;
+      if (!seg) return { tab: 'tasks' };
+      const segments = s.segments.map((g) => (g.id === s.activeId ? { ...g, end: vNow } : g));
+      const todos = seg.todoId ? s.todos.map((t) => (t.id === seg.todoId ? { ...t, archived: true } : t)) : s.todos;
+      return { segments, todos, activeId: null, paused: false, pausedPid: null, sheetSegId: null, fillGap: null, tab: 'tasks' };
     });
   }
 
@@ -635,6 +698,11 @@ export default function App() {
               onTapProject={tapProject}
               onTogglePause={togglePause}
               onSetLayout={(l) => setState({ tileLayout: l })}
+              onChecklistText={setChecklistText}
+              onChecklistToggle={toggleChecklistItem}
+              onChecklistAdd={addChecklistRow}
+              onSetPlannedEnd={setPlannedEnd}
+              onComplete={completeBooking}
             />
           )}
 
@@ -741,8 +809,13 @@ function TrackView(props: {
   onTapProject: (pid: string) => void;
   onTogglePause: () => void;
   onSetLayout: (l: TileLayout) => void;
+  onChecklistText: (i: number, text: string) => void;
+  onChecklistToggle: (i: number) => void;
+  onChecklistAdd: () => void;
+  onSetPlannedEnd: (min: number | null) => void;
+  onComplete: () => void;
 }) {
-  const { state: s, running, activeSeg, bannerProj, totals, topId, onTapProject, onTogglePause, onSetLayout } = props;
+  const { state: s, running, activeSeg, bannerProj, totals, topId, onTapProject, onTogglePause, onSetLayout, onChecklistText, onChecklistToggle, onChecklistAdd, onSetPlannedEnd, onComplete } = props;
 
   // ---- banner ----
   let bannerBg: string;
@@ -890,6 +963,68 @@ function TrackView(props: {
           <button type="button" onClick={onTogglePause} style={pauseStyle}>
             {pauseLabel}
           </button>
+        )}
+
+        {running && activeSeg && (
+          <div style={{ marginTop: 14, borderTop: '1px solid rgba(255,255,255,.25)', paddingTop: 12 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+              <div style={{ fontSize: 12, color: bannerMutedColor }}>
+                Start <span style={{ color: bannerTextColor, fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{fmtClock(activeSeg.start)}</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontSize: 12, color: bannerMutedColor }}>Geplantes Ende</span>
+                <input
+                  type="time"
+                  value={activeSeg.plannedEnd != null ? fmtClock(activeSeg.plannedEnd) : ''}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    if (!v) return onSetPlannedEnd(null);
+                    const [h, m] = v.split(':').map(Number);
+                    onSetPlannedEnd(h * 60 + m);
+                  }}
+                  style={{ border: 'none', padding: '5px 8px', fontSize: 13, color: C.dk1, background: C.lt1, fontVariantNumeric: 'tabular-nums' }}
+                />
+              </div>
+            </div>
+
+            <div style={{ fontSize: 11, letterSpacing: '.1em', textTransform: 'uppercase', color: bannerMutedColor, fontWeight: 700, margin: '14px 0 8px' }}>
+              Aufgaben
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {(activeSeg.checklist ?? []).map((it, i) => (
+                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <input
+                    type="checkbox"
+                    checked={it.done}
+                    onChange={() => onChecklistToggle(i)}
+                    style={{ width: 18, height: 18, flex: '0 0 auto' }}
+                  />
+                  <input
+                    type="text"
+                    value={it.text}
+                    onChange={(e) => onChecklistText(i, e.target.value)}
+                    placeholder="Subaktivität …"
+                    style={{ flex: '1 1 auto', minWidth: 0, border: 'none', padding: '7px 9px', fontSize: 14, color: C.dk1, background: C.lt1, textDecoration: it.done ? 'line-through' : 'none' }}
+                  />
+                </div>
+              ))}
+            </div>
+            <button
+              type="button"
+              onClick={onChecklistAdd}
+              style={{ marginTop: 8, padding: '6px 12px', background: 'rgba(255,255,255,.18)', color: bannerTextColor, fontSize: 13, fontWeight: 700 }}
+            >
+              + Aufgabe
+            </button>
+
+            <button
+              type="button"
+              onClick={onComplete}
+              style={{ width: '100%', marginTop: 14, padding: 12, background: C.lt1, color: C.accent1, fontSize: 14, fontWeight: 700, letterSpacing: '.04em', textTransform: 'uppercase' }}
+            >
+              Erledigt
+            </button>
+          </div>
         )}
       </div>
 
@@ -1747,7 +1882,7 @@ function DailyTasksView(props: {
   onTake: (t: Todo) => void;
 }) {
   const { state: s, onAdd, onEdit, onTake } = props;
-  const provisional = s.todos.filter((t) => t.title.trim() === '');
+  const provisional = s.todos.filter((t) => !t.archived && t.title.trim() === '');
   const [sortKey, setSortKey] = useState<TaskSortKey>('prio');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
 
@@ -1834,7 +1969,7 @@ function DailyTasksView(props: {
 
   // "concrete" tasks (with a title) are grouped by category; title-less ones are provisional
   const categoryTable = (cat: TodoCategory) => {
-    const rows = s.todos.filter((t) => t.category === cat && t.title.trim() !== '').sort(cmp);
+    const rows = s.todos.filter((t) => !t.archived && t.category === cat && t.title.trim() !== '').sort(cmp);
     return (
       <div key={cat} style={{ marginBottom: 22 }}>
         <div style={{ fontSize: 11, letterSpacing: '.12em', textTransform: 'uppercase', color: C.accent1, fontWeight: 700, marginBottom: 8 }}>
@@ -1901,7 +2036,7 @@ function DailyTasksView(props: {
         </button>
       </div>
 
-      {s.todos.length === 0 ? (
+      {s.todos.filter((t) => !t.archived).length === 0 ? (
         <div style={{ fontSize: 13, color: C.muted, padding: '8px 0' }}>Noch keine Aufgaben – lege mit „+ Aufgabe" eine an.</div>
       ) : (
         <>
@@ -2002,6 +2137,7 @@ function TodoSheet(props: {
       importance,
       drawing,
       zug,
+      archived: initial?.archived ?? false,
     };
   }
   function save() {

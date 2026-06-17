@@ -5,6 +5,12 @@ export interface Project {
   color: string;
 }
 
+/** A single sub-activity in a running booking's detail checklist. */
+export interface ChecklistItem {
+  text: string;
+  done: boolean;
+}
+
 /** A booking ("Buchung"/"Segment"): a contiguous interval on a project.
  *  start/end are minutes since midnight (0…1440). */
 export interface Segment {
@@ -13,6 +19,12 @@ export interface Segment {
   start: number;
   end: number;
   activity: string;
+  /** planned end (minutes since midnight) shown in the project detail; null = open */
+  plannedEnd?: number | null;
+  /** sub-activity checklist for the project detail view */
+  checklist?: ChecklistItem[];
+  /** the ToDo this booking was started from (for archiving on "Erledigt") */
+  todoId?: string | null;
 }
 
 /** A booking together with the day it belongs to (YYYY-MM-DD), used for
@@ -43,6 +55,8 @@ export interface Todo {
   drawing: string | null;
   /** can be done "on the train" – highlighted in the lists */
   zug: boolean;
+  /** archived (e.g. after "Erledigt") – kept in storage but hidden from lists */
+  archived: boolean;
 }
 export type TileLayout = 'grid' | 'sized' | 'list';
 export type ReportPeriod = 'heute' | 'woche' | 'monat' | 'jahr' | 'zeitraum';

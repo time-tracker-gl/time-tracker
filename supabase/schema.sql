@@ -33,10 +33,18 @@ create table if not exists public.segments (
   start_min  integer not null,                       -- minutes since midnight
   end_min    integer not null,
   activity   text not null default '',
+  planned_end integer,                                  -- planned end (minutes since midnight)
+  checklist  jsonb not null default '[]'::jsonb,         -- detail-view sub-activities
+  todo_id    text,                                       -- ToDo this booking came from
   created_at timestamptz not null default now()
 );
 
 create index if not exists segments_user_day_idx on public.segments (user_id, day);
+
+-- If the segments table already exists from an earlier version, add the columns:
+alter table public.segments add column if not exists planned_end integer;
+alter table public.segments add column if not exists checklist jsonb not null default '[]'::jsonb;
+alter table public.segments add column if not exists todo_id text;
 
 alter table public.segments enable row level security;
 
@@ -60,12 +68,14 @@ create table if not exists public.todos (
   importance  integer not null default 2,             -- 0 (very high) … 4 (very low)
   drawing     text,                                    -- optional hand-drawn sketch (PNG data URL)
   zug         boolean not null default false,          -- can be done "on the train"
+  archived    boolean not null default false,          -- hidden from lists after "Erledigt"
   created_at  timestamptz not null default now()
 );
 
 -- If the todos table already exists from an earlier version, add the columns:
 alter table public.todos add column if not exists drawing text;
 alter table public.todos add column if not exists zug boolean not null default false;
+alter table public.todos add column if not exists archived boolean not null default false;
 
 create index if not exists todos_user_idx on public.todos (user_id, created_at);
 
