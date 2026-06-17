@@ -381,19 +381,6 @@ export default function App() {
     });
   }
 
-  function endDay() {
-    setState((s) => {
-      let sheetSegId = s.sheetSegId;
-      let segments = s.segments;
-      if (s.activeId) {
-        const cur = s.segments.find((g) => g.id === s.activeId);
-        segments = s.segments.map((g) => (g.id === s.activeId ? { ...g, end: vNow } : g));
-        if (cur && vNow - cur.start >= 1 && needsActivity(cur)) sheetSegId = cur.id;
-      }
-      return { segments, activeId: null, paused: false, pausedPid: null, sheetSegId };
-    });
-  }
-
   function addProject() {
     setState((s) => {
       const code = s.draftCode.trim();
@@ -706,28 +693,6 @@ export default function App() {
             </span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            {isTrack && (
-              <button
-                type="button"
-                onClick={endDay}
-                disabled={!(running || s.paused)}
-                style={{
-                  flex: '0 0 auto',
-                  padding: '8px 13px',
-                  fontSize: 11,
-                  fontWeight: 700,
-                  letterSpacing: '.08em',
-                  textTransform: 'uppercase',
-                  whiteSpace: 'nowrap',
-                  border: '1px solid ' + (running || s.paused ? C.accent1 : '#D5DBDF'),
-                  color: running || s.paused ? C.accent1 : '#B9C4CB',
-                  background: running || s.paused ? C.lt1 : '#F7F8F9',
-                  cursor: running || s.paused ? 'pointer' : 'default',
-                }}
-              >
-                Tagesende
-              </button>
-            )}
             <div style={{ textAlign: 'right', lineHeight: 1.2, whiteSpace: 'nowrap' }}>
               <div style={{ fontSize: 13, fontWeight: 700, color: C.dk1, whiteSpace: 'nowrap' }}>{dateText}</div>
               <div style={{ fontSize: 11, color: C.greyFooter, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>

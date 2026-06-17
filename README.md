@@ -36,7 +36,6 @@ Drei Tabs in der unteren Navigation:
   Dauer (FA-03, FA-07).
 - Pause / Fortsetzen – Fortsetzen startet eine neue Buchung auf demselben
   Projekt (FA-04).
-- „Tagesende“ in der Kopfzeile beendet die Erfassung (FA-05).
 - Drei umschaltbare Kachel-Layouts: Raster, Gewichtet, Liste (FA-06).
 
 ### Pflege (Projektverwaltung)
