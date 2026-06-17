@@ -541,6 +541,18 @@ export default function App() {
   function setPlannedEnd(min: number | null) {
     patchActiveSeg({ plannedEnd: min });
   }
+  /** Edit the running booking's start time (clamped to [0, now]). */
+  function setActiveStart(total: number) {
+    setState((s) => ({
+      segments: s.segments.map((g) =>
+        g.id === s.activeId ? { ...g, start: Math.max(0, Math.min(total, g.end)) } : g,
+      ),
+    }));
+  }
+  /** Edit the running booking's description (activity text). */
+  function setActiveActivity(text: string) {
+    patchActiveSeg({ activity: text });
+  }
   /** "Erledigt": end the active booking, archive its source ToDo, back to ToDo view. */
   function completeBooking() {
     setState((s) => {
@@ -741,6 +753,8 @@ export default function App() {
               onChecklistToggle={toggleChecklistItem}
               onChecklistAdd={addChecklistRow}
               onChecklistMove={moveChecklistItem}
+              onSetStart={setActiveStart}
+              onSetActivity={setActiveActivity}
               onSetPlannedEnd={setPlannedEnd}
               onComplete={completeBooking}
               onCloseBooking={closeBooking}
@@ -854,11 +868,13 @@ function TrackView(props: {
   onChecklistToggle: (i: number) => void;
   onChecklistAdd: () => void;
   onChecklistMove: (i: number, dir: -1 | 1) => void;
+  onSetStart: (min: number) => void;
+  onSetActivity: (text: string) => void;
   onSetPlannedEnd: (min: number | null) => void;
   onComplete: () => void;
   onCloseBooking: () => void;
 }) {
-  const { state: s, running, activeSeg, bannerProj, totals, topId, onTapProject, onTogglePause, onSetLayout, onChecklistText, onChecklistToggle, onChecklistAdd, onChecklistMove, onSetPlannedEnd, onComplete, onCloseBooking } = props;
+  const { state: s, running, activeSeg, bannerProj, totals, topId, onTapProject, onTogglePause, onSetLayout, onChecklistText, onChecklistToggle, onChecklistAdd, onChecklistMove, onSetStart, onSetActivity, onSetPlannedEnd, onComplete, onCloseBooking } = props;
 
   // ---- banner ----
   let bannerBg: string;
@@ -976,22 +992,6 @@ function TrackView(props: {
             >
               {bannerProject}
             </div>
-            {running && activeSeg && activeSeg.activity.trim() !== '' && (
-              <div
-                style={{
-                  fontSize: 13,
-                  fontWeight: 500,
-                  color: bannerMutedColor,
-                  marginTop: 4,
-                  display: '-webkit-box',
-                  WebkitLineClamp: 2,
-                  WebkitBoxOrient: 'vertical',
-                  overflow: 'hidden',
-                }}
-              >
-                {activeSeg.activity}
-              </div>
-            )}
           </div>
           <div style={{ textAlign: 'right', flex: '0 0 auto' }}>
             <div style={{ fontSize: 34, fontWeight: 300, color: bannerTextColor, fontVariantNumeric: 'tabular-nums', lineHeight: 1 }}>
@@ -1011,8 +1011,19 @@ function TrackView(props: {
         {running && activeSeg && (
           <div style={{ marginTop: 14, borderTop: '1px solid rgba(255,255,255,.25)', paddingTop: 12 }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
-              <div style={{ fontSize: 12, color: bannerMutedColor }}>
-                Start <span style={{ color: bannerTextColor, fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{fmtClock(activeSeg.start)}</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontSize: 12, color: bannerMutedColor }}>Start</span>
+                <input
+                  type="time"
+                  value={fmtClock(activeSeg.start)}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    if (!v) return;
+                    const [h, m] = v.split(':').map(Number);
+                    onSetStart(h * 60 + m);
+                  }}
+                  style={{ border: 'none', padding: '5px 8px', fontSize: 13, color: C.dk1, background: C.lt1, fontVariantNumeric: 'tabular-nums' }}
+                />
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <span style={{ fontSize: 12, color: bannerMutedColor }}>Geplantes Ende</span>
@@ -1029,6 +1040,17 @@ function TrackView(props: {
                 />
               </div>
             </div>
+
+            <div style={{ fontSize: 11, letterSpacing: '.1em', textTransform: 'uppercase', color: bannerMutedColor, fontWeight: 700, margin: '14px 0 8px' }}>
+              Beschreibung
+            </div>
+            <textarea
+              value={activeSeg.activity}
+              onChange={(e) => onSetActivity(e.target.value)}
+              placeholder="Was wird gemacht? …"
+              rows={2}
+              style={{ width: '100%', resize: 'vertical', border: 'none', padding: '8px 10px', fontSize: 14, lineHeight: 1.4, color: C.dk1, background: C.lt1, outline: 'none', fontFamily: 'inherit' }}
+            />
 
             <div style={{ fontSize: 11, letterSpacing: '.1em', textTransform: 'uppercase', color: bannerMutedColor, fontWeight: 700, margin: '14px 0 8px' }}>
               Aufgaben
