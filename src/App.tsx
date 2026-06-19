@@ -479,6 +479,10 @@ export default function App() {
   function archiveTodo(id: string) {
     setState((s) => ({ todos: s.todos.map((t) => (t.id === id ? { ...t, archived: true } : t)) }));
   }
+  /** Restore an archived task back into the active Daily-Tasks list. */
+  function unarchiveTodo(id: string) {
+    setState((s) => ({ todos: s.todos.map((t) => (t.id === id ? { ...t, archived: false } : t)) }));
+  }
   /** Hand a ToDo over to the Buchungen view: stop the running booking and start a
    *  new one on the ToDo's project, with the ToDo text as the activity (FA). */
   function takeTodoToProject(todo: Todo) {
@@ -643,6 +647,7 @@ export default function App() {
   const isReport = s.tab === 'report';
   const isTasks = s.tab === 'tasks';
   const isAdmin = s.tab === 'admin';
+  const isArchiv = s.tab === 'archiv';
   const today = new Date();
   const dateText = today.toLocaleDateString('de-DE', { weekday: 'short', day: 'numeric', month: 'long' });
   const clockText = fmtClock(vNow);
@@ -802,6 +807,14 @@ export default function App() {
               onAddProject={addProject}
               accountEmail={isSupabaseConfigured ? userEmail : null}
               onLogout={logout}
+            />
+          )}
+
+          {isArchiv && (
+            <ArchiveView
+              state={s}
+              onEdit={(t) => setTodoSheet(t)}
+              onRestore={unarchiveTodo}
             />
           )}
         </main>
@@ -1857,10 +1870,16 @@ function BottomNav({ tab, onSelect }: { tab: Tab; onSelect: (t: Tab) => void }) 
       <path d="M9 6h11M9 12h11M9 18h11M4 6l1 1 2-2M4 12l1 1 2-2M4 18l1 1 2-2" />
     </svg>
   );
+  const archiveIcon = (
+    <svg width={19} height={19} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" style={{ display: 'block' }}>
+      <path d="M3 4h18v4H3zM5 8v12h14V8M9 12h6" />
+    </svg>
+  );
   const items: [Tab, string, React.ReactNode][] = [
     ['tasks', 'Daily Tasks', checklist],
     ['track', 'Buchungen', '▣'],
     ['report', 'Reporting', '▥'],
+    ['archiv', 'Archiv', archiveIcon],
     ['admin', 'Pflege', wrench],
   ];
   return (
@@ -2306,6 +2325,59 @@ function DailyTasksView(props: {
             Frist/Wicht: 1 = höchste (Frist 1 = sofort, Wicht 1 = very high) · Prio = Frist + Wicht · Spaltenkopf tippen zum Sortieren · Zeile tippen zum Bearbeiten.
           </div>
         </>
+      )}
+    </section>
+  );
+}
+
+/* ======================= ARCHIV ======================= */
+function ArchiveView(props: { state: AppState; onEdit: (t: Todo) => void; onRestore: (id: string) => void }) {
+  const { state: s, onEdit, onRestore } = props;
+  const archived = s.todos.filter((t) => t.archived);
+  return (
+    <section style={{ padding: '18px 20px 36px' }}>
+      <div style={{ marginBottom: 16 }}>
+        <div style={{ fontSize: 11, letterSpacing: '.14em', textTransform: 'uppercase', color: C.greyFooter, fontWeight: 700 }}>Archiv</div>
+        <div style={{ fontSize: 13, color: C.greyFooter, marginTop: 3 }}>Erledigte Aufgaben ({archived.length})</div>
+      </div>
+
+      {archived.length === 0 ? (
+        <div style={{ fontSize: 13, color: C.muted, padding: '8px 0' }}>Noch keine erledigten Aufgaben.</div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {archived.map((t) => {
+            const items = (t.checklist ?? []).filter((c) => c.text.trim() !== '');
+            const done = items.filter((c) => c.done).length;
+            return (
+              <div
+                key={t.id}
+                onClick={() => onEdit(t)}
+                style={{ display: 'flex', alignItems: 'center', gap: 10, border: '1px solid #E1E5E8', background: C.lt1, padding: '10px 12px', cursor: 'pointer' }}
+              >
+                <div style={{ flex: '1 1 auto', minWidth: 0 }}>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: C.dk1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    {t.title.trim() === '' ? '(ohne Titel)' : t.title}
+                  </div>
+                  <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>
+                    {CATEGORY_LABELS[t.category]}
+                    {items.length > 0 && <span> &nbsp;·&nbsp; ✓ {done}/{items.length}</span>}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onRestore(t.id);
+                  }}
+                  title="Wiederherstellen – zurück in die Aufgabenliste"
+                  style={{ flex: '0 0 auto', padding: '8px 12px', border: '1px solid ' + C.accent1, background: C.lt1, color: C.accent1, fontSize: 12, fontWeight: 700, letterSpacing: '.04em', whiteSpace: 'nowrap' }}
+                >
+                  Wiederherstellen
+                </button>
+              </div>
+            );
+          })}
+        </div>
       )}
     </section>
   );

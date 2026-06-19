@@ -33,7 +33,7 @@ export interface DaySegment extends Segment {
   day: string;
 }
 
-export type Tab = 'track' | 'report' | 'tasks' | 'admin';
+export type Tab = 'track' | 'report' | 'tasks' | 'admin' | 'archiv';
 
 export type TodoCategory = 'projekt' | 'akquise' | 'intern';
 
