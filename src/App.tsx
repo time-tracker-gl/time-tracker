@@ -472,6 +472,11 @@ export default function App() {
     setState((s) => ({ todos: s.todos.filter((t) => t.id !== id) }));
     setTodoSheet(null);
   }
+  /** "Erledigt" from the ToDo list: close the task and move it to the archive –
+   *  same effect as the booking's "Erledigt" (which archives the linked ToDo). */
+  function archiveTodo(id: string) {
+    setState((s) => ({ todos: s.todos.map((t) => (t.id === id ? { ...t, archived: true } : t)) }));
+  }
   /** Hand a ToDo over to the Buchungen view: stop the running booking and start a
    *  new one on the ToDo's project, with the ToDo text as the activity (FA). */
   function takeTodoToProject(todo: Todo) {
@@ -767,6 +772,7 @@ export default function App() {
               onAdd={() => setTodoSheet('new')}
               onEdit={(t) => setTodoSheet(t)}
               onTake={takeTodoToProject}
+              onComplete={archiveTodo}
             />
           )}
 
@@ -2007,8 +2013,9 @@ function DailyTasksView(props: {
   onAdd: () => void;
   onEdit: (t: Todo) => void;
   onTake: (t: Todo) => void;
+  onComplete: (id: string) => void;
 }) {
-  const { state: s, onAdd, onEdit, onTake } = props;
+  const { state: s, onAdd, onEdit, onTake, onComplete } = props;
   const provisional = s.todos.filter((t) => !t.archived && t.title.trim() === '');
   const [sortKey, setSortKey] = useState<TaskSortKey>('prio');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
@@ -2094,6 +2101,34 @@ function DailyTasksView(props: {
     </button>
   );
 
+  const erledigtButton = (t: Todo) => (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        onComplete(t.id);
+      }}
+      title="Erledigt – ins Archiv verschieben"
+      style={{
+        flex: '0 0 auto',
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        width: 30,
+        height: 30,
+        padding: 0,
+        border: '1px solid #2E8B3D',
+        background: '#2E8B3D',
+        color: C.lt1,
+        cursor: 'pointer',
+      }}
+    >
+      <svg width={15} height={15} viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M5 13l4 4L19 7" fill="none" stroke="currentColor" strokeWidth={3} strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    </button>
+  );
+
   // "concrete" tasks (with a title) are grouped by category; title-less ones are provisional
   const categoryTable = (cat: TodoCategory) => {
     const rows = s.todos.filter((t) => !t.archived && t.category === cat && t.title.trim() !== '').sort(cmp);
@@ -2107,12 +2142,12 @@ function DailyTasksView(props: {
         ) : (
           <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
             <colgroup>
-              <col style={{ width: '34%' }} />
-              <col style={{ width: '15%' }} />
-              <col style={{ width: '11%' }} />
-              <col style={{ width: '11%' }} />
-              <col style={{ width: '13%' }} />
-              <col style={{ width: '16%' }} />
+              <col style={{ width: '30%' }} />
+              <col style={{ width: '14%' }} />
+              <col style={{ width: '10%' }} />
+              <col style={{ width: '10%' }} />
+              <col style={{ width: '12%' }} />
+              <col style={{ width: '24%' }} />
             </colgroup>
             <thead>
               <tr>
@@ -2121,7 +2156,7 @@ function DailyTasksView(props: {
                 {th('Frist', 'urgency', 'right')}
                 {th('Wicht', 'importance', 'right')}
                 {th('Prio', 'prio', 'right')}
-                <th style={{ borderBottom: '2px solid #E1E5E8' }} aria-label="Übernehmen" />
+                <th style={{ borderBottom: '2px solid #E1E5E8' }} aria-label="Aktionen" />
               </tr>
             </thead>
             <tbody>
@@ -2151,7 +2186,12 @@ function DailyTasksView(props: {
                   <td style={taskNumCell} title={URGENCY_LABELS[t.urgency]}>{t.urgency + 1}</td>
                   <td style={taskNumCell} title={IMPORTANCE_LABELS[t.importance]}>{t.importance + 1}</td>
                   <td style={{ ...taskNumCell, color: C.dk1, fontWeight: 700 }}>{t.urgency + t.importance + 2}</td>
-                  <td style={{ ...taskCellStyle, textAlign: 'center', padding: '6px 2px' }}>{takeButton(t)}</td>
+                  <td style={{ ...taskCellStyle, padding: '6px 2px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+                      {takeButton(t)}
+                      {erledigtButton(t)}
+                    </div>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -2198,6 +2238,7 @@ function DailyTasksView(props: {
                     )}
                     <span style={{ flex: '1 1 auto' }} />
                     {takeButton(t)}
+                    {erledigtButton(t)}
                   </div>
                 ))}
               </div>
