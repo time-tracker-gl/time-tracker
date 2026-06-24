@@ -64,6 +64,8 @@ create table if not exists public.todos (
   category    text not null,                          -- 'projekt' | 'akquise' | 'intern'
   project_id  text references public.projects (id) on delete set null,
   planned_min integer not null default 0,             -- planned duration in minutes
+  actual_min  integer,                                 -- actually needed minutes (focus countdown); null = not timed
+  completed_at text,                                    -- day the task was completed (YYYY-MM-DD)
   urgency     integer not null default 2,             -- 0 (sofort) … 5 (später)
   importance  integer not null default 2,             -- 0 (very high) … 4 (very low)
   drawing     text,                                    -- optional hand-drawn sketch (PNG data URL)
@@ -78,6 +80,8 @@ alter table public.todos add column if not exists drawing text;
 alter table public.todos add column if not exists zug boolean not null default false;
 alter table public.todos add column if not exists archived boolean not null default false;
 alter table public.todos add column if not exists checklist jsonb not null default '[]'::jsonb;
+alter table public.todos add column if not exists actual_min integer;
+alter table public.todos add column if not exists completed_at text;
 
 create index if not exists todos_user_idx on public.todos (user_id, created_at);
 

@@ -67,6 +67,28 @@ const SEED_SEGMENTS: Segment[] = [
 ];
 
 const STORAGE_KEY = 'rpc-zeiterfassung-v1';
+/** Persists the running focus countdown so it survives reloads / app restarts:
+ *  the actually-needed time is measured from this absolute start timestamp. */
+const RUN_STORAGE_KEY = 'rpc-zeiterfassung-run-v1';
+
+/** A running focus countdown started from the task list. */
+interface RunSession {
+  todoId: string;
+  /** epoch ms when the countdown was started (basis for the elapsed/actual time) */
+  startedAt: number;
+}
+
+function loadRun(): RunSession | null {
+  try {
+    const raw = localStorage.getItem(RUN_STORAGE_KEY);
+    if (!raw) return null;
+    const r = JSON.parse(raw);
+    if (r && typeof r.todoId === 'string' && typeof r.startedAt === 'number') return r;
+    return null;
+  } catch {
+    return null;
+  }
+}
 
 function isoDate(d: Date): string {
   return d.toISOString().slice(0, 10);
@@ -133,7 +155,7 @@ function dataSignature(projects: Project[], segments: Segment[], todos: Todo[]):
   return JSON.stringify({
     p: projects.map((p) => [p.id, p.code, p.name, p.color]),
     s: segments.map((s) => [s.id, s.pid, s.start, s.end, s.activity, s.plannedEnd ?? null, s.checklist ?? [], s.todoId ?? null]),
-    t: todos.map((t) => [t.id, t.title, t.category, t.projectId, t.plannedMin, t.urgency, t.importance, t.drawing, t.zug, t.archived, t.checklist ?? []]),
+    t: todos.map((t) => [t.id, t.title, t.category, t.projectId, t.plannedMin, t.actualMin ?? null, t.completedAt ?? null, t.urgency, t.importance, t.drawing, t.zug, t.archived, t.checklist ?? []]),
   });
 }
 
@@ -196,10 +218,11 @@ export default function App() {
   // Bookings for the active Reporting range (Woche/Monat/Jahr/Zeitraum). Today's
   // live bookings are merged in at render time, so only past days are fetched here.
   const [reportSegments, setReportSegments] = useState<DaySegment[]>([]);
-  // Archive (completed tasks) time-slice filter + the bookings fetched for it.
+  // Archive (completed tasks) time-slice filter (Woche/Monat/Jahr).
   const [archivePeriod, setArchivePeriod] = useState<ReportPeriod>('monat');
-  const [archiveSegments, setArchiveSegments] = useState<DaySegment[]>([]);
 
+  // Running focus countdown (started from the task list with the Play button).
+  const [run, setRun] = useState<RunSession | null>(loadRun);
   // Daily-Tasks editor sheet: null = closed, 'new' = create, Todo = edit.
   const [todoSheet, setTodoSheet] = useState<Todo | 'new' | null>(null);
   // pending confirmation dialog (e.g. before archiving a task / completing a booking)
@@ -327,30 +350,6 @@ export default function App() {
     };
   }, [state.tab, state.reportPeriod, state.custFrom, state.custTo, userEmail, dataLoaded]);
 
-  // Load bookings for the Archive's selected time slice (Woche/Monat/Jahr).
-  useEffect(() => {
-    if (state.tab !== 'archiv') return;
-    if (!isSupabaseConfigured) {
-      setArchiveSegments([]); // local mode: only today (merged in at render)
-      return;
-    }
-    if (!userEmail || !dataLoaded) return;
-    const { from, to } = periodRange(archivePeriod, state.custFrom, state.custTo, new Date());
-    let active = true;
-    (async () => {
-      try {
-        const segs = await loadSegmentsRange(from, to);
-        if (active) setArchiveSegments(segs);
-      } catch (e) {
-        console.error('Supabase archive load failed', e);
-        if (active) setArchiveSegments([]);
-      }
-    })();
-    return () => {
-      active = false;
-    };
-  }, [state.tab, archivePeriod, userEmail, dataLoaded]);
-
   async function logout() {
     if (supabase) await supabase.auth.signOut();
   }
@@ -387,49 +386,19 @@ export default function App() {
     }
   }, [state.projects, state.segments, state.todos, state.tileLayout]);
 
+  // persist the running focus countdown (so it survives reloads)
+  useEffect(() => {
+    try {
+      if (run) localStorage.setItem(RUN_STORAGE_KEY, JSON.stringify(run));
+      else localStorage.removeItem(RUN_STORAGE_KEY);
+    } catch {
+      /* ignore quota / privacy-mode errors */
+    }
+  }, [run]);
+
   const proj = (pid: string) => state.projects.find((p) => p.id === pid);
 
   // ---------- actions ----------
-  function tapProject(pid: string) {
-    setState((s) => {
-      let segments = s.segments.slice();
-      let sheetSegId = s.sheetSegId;
-      if (s.activeId) {
-        const cur = segments.find((g) => g.id === s.activeId);
-        if (cur && cur.pid === pid) return s; // already running this project
-        if (cur) {
-          if (vNow - cur.start >= 1) {
-            // keep the finished booking; only prompt for a description if none was entered yet
-            segments = segments.map((g) => (g.id === s.activeId ? { ...g, end: vNow } : g));
-            if (needsActivity(cur)) sheetSegId = cur.id;
-          } else {
-            // discard a zero-minute booking from an accidental / too-quick switch
-            segments = segments.filter((g) => g.id !== s.activeId);
-          }
-        }
-      }
-      const id = 'u' + Date.now();
-      segments.push({ id, pid, start: vNow, end: vNow, activity: '', plannedEnd: null, checklist: emptyChecklist(), todoId: null });
-      return { segments, activeId: id, paused: false, pausedPid: null, sheetSegId };
-    });
-  }
-
-  function togglePause() {
-    setState((s) => {
-      if (s.activeId) {
-        const segments = s.segments.map((g) => (g.id === s.activeId ? { ...g, end: vNow } : g));
-        const cur = s.segments.find((g) => g.id === s.activeId);
-        return { segments, activeId: null, paused: true, pausedPid: cur ? cur.pid : null };
-      }
-      if (s.paused && s.pausedPid) {
-        const id = 'u' + Date.now();
-        const segments = s.segments.concat([{ id, pid: s.pausedPid, start: vNow, end: vNow, activity: '', plannedEnd: null, checklist: emptyChecklist(), todoId: null }]);
-        return { segments, activeId: id, paused: false, pausedPid: null };
-      }
-      return s;
-    });
-  }
-
   function addProject() {
     setState((s) => {
       const code = s.draftCode.trim();
@@ -506,42 +475,48 @@ export default function App() {
     setState((s) => ({ todos: s.todos.filter((t) => t.id !== id) }));
     setTodoSheet(null);
   }
-  /** "Erledigt" from the ToDo list: close the task and move it to the archive –
-   *  same effect as the booking's "Erledigt" (which archives the linked ToDo). */
+  /** "Erledigt" from the ToDo list (without timing): move the task to the archive. */
   function archiveTodo(id: string) {
-    setState((s) => ({ todos: s.todos.map((t) => (t.id === id ? { ...t, archived: true } : t)) }));
+    setState((s) => ({ todos: s.todos.map((t) => (t.id === id ? { ...t, archived: true, completedAt: localISODate() } : t)) }));
   }
-  /** Restore an archived task back into the active Daily-Tasks list. */
+  /** Restore an archived task back into the active Daily-Tasks list (drops its
+   *  recorded times so a fresh run can be measured). */
   function unarchiveTodo(id: string) {
-    setState((s) => ({ todos: s.todos.map((t) => (t.id === id ? { ...t, archived: false } : t)) }));
-  }
-  /** Hand a ToDo over to the Buchungen view: stop the running booking and start a
-   *  new one on the ToDo's project, with the ToDo text as the activity (FA). */
-  function takeTodoToProject(todo: Todo) {
-    if (!todo.projectId) return;
-    const pid = todo.projectId;
-    setState((s) => {
-      let segments = s.segments.slice();
-      if (s.activeId) {
-        const cur = segments.find((g) => g.id === s.activeId);
-        if (cur) {
-          if (vNow - cur.start >= 1) segments = segments.map((g) => (g.id === s.activeId ? { ...g, end: vNow } : g));
-          else segments = segments.filter((g) => g.id !== s.activeId);
-        }
-      }
-      const id = 'u' + Date.now();
-      const plannedEnd = todo.plannedMin > 0 ? Math.min(24 * 60, vNow + todo.plannedMin) : null;
-      // carry the ToDo's own activity checklist into the booking detail
-      const checklist: ChecklistItem[] = todo.checklist && todo.checklist.length ? todo.checklist.map((c) => ({ ...c })) : emptyChecklist();
-      segments.push({ id, pid, start: vNow, end: vNow, activity: todo.title, plannedEnd, checklist, todoId: todo.id });
-      return { segments, activeId: id, paused: false, pausedPid: null, sheetSegId: null, fillGap: null, tab: 'track' };
-    });
+    setState((s) => ({ todos: s.todos.map((t) => (t.id === id ? { ...t, archived: false, actualMin: null, completedAt: null } : t)) }));
   }
 
-  // ---------- project detail (active booking) ----------
-  function patchActiveSeg(patch: Partial<Segment>) {
-    setState((s) => ({ segments: s.segments.map((g) => (g.id === s.activeId ? { ...g, ...patch } : g)) }));
+  // ---------- focus countdown (started from the task list) ----------
+  /** Start the focus countdown for a task: shows the planned time counting down. */
+  function startCountdown(todo: Todo) {
+    setRun({ todoId: todo.id, startedAt: Date.now() });
   }
+  /** "Schließen": stop the countdown without completing the task (no time recorded). */
+  function cancelCountdown() {
+    setRun(null);
+  }
+  /** "Erledigt" from the countdown: record the actually needed time and archive
+   *  the task, so planned vs. actual is documented for better future estimates. */
+  function finishCountdown() {
+    if (!run) return;
+    const actualMin = Math.max(1, Math.round((Date.now() - run.startedAt) / 60000));
+    const id = run.todoId;
+    setState((s) => ({
+      todos: s.todos.map((t) => (t.id === id ? { ...t, archived: true, actualMin, completedAt: localISODate() } : t)),
+    }));
+    setRun(null);
+  }
+  /** Toggle a sub-activity of the task currently shown in the countdown. */
+  function toggleRunChecklistItem(i: number) {
+    if (!run) return;
+    const id = run.todoId;
+    setState((s) => ({
+      todos: s.todos.map((t) =>
+        t.id === id ? { ...t, checklist: (t.checklist ?? []).map((c, idx) => (idx === i ? { ...c, done: !c.done } : c)) } : t,
+      ),
+    }));
+  }
+
+  // ---------- booking detail (Reporting sheet) ----------
   /** Update a booking's checklist and mirror it back to the linked ToDo. */
   function applyChecklist(getId: (s: AppState) => string | null, updater: (cl: ChecklistItem[]) => ChecklistItem[]) {
     setState((s) => {
@@ -554,69 +529,7 @@ export default function App() {
       return { segments, todos };
     });
   }
-  const applyActiveChecklist = (u: (cl: ChecklistItem[]) => ChecklistItem[]) => applyChecklist((s) => s.activeId, u);
   const applySheetChecklist = (u: (cl: ChecklistItem[]) => ChecklistItem[]) => applyChecklist((s) => s.sheetSegId, u);
-  function setChecklistText(i: number, text: string) {
-    applyActiveChecklist((cl) => {
-      if (cl[i]) cl[i] = { ...cl[i], text };
-      return cl;
-    });
-  }
-  function toggleChecklistItem(i: number) {
-    applyActiveChecklist((cl) => {
-      if (cl[i]) cl[i] = { ...cl[i], done: !cl[i].done };
-      return cl;
-    });
-  }
-  function addChecklistRow() {
-    applyActiveChecklist((cl) => cl.concat([{ text: '', done: false }]));
-  }
-  function moveChecklistItem(i: number, dir: -1 | 1) {
-    applyActiveChecklist((cl) => {
-      const j = i + dir;
-      if (j < 0 || j >= cl.length) return cl;
-      [cl[i], cl[j]] = [cl[j], cl[i]];
-      return cl;
-    });
-  }
-  function setPlannedEnd(min: number | null) {
-    patchActiveSeg({ plannedEnd: min });
-  }
-  /** Edit the running booking's start time (clamped to [previous booking's end, now]). */
-  function setActiveStart(total: number) {
-    setState((s) => ({
-      segments: s.segments.map((g) =>
-        g.id === s.activeId ? { ...g, start: Math.max(leftBound(s.segments, g.id, g.start), Math.min(total, g.end)) } : g,
-      ),
-    }));
-  }
-  /** Edit the running booking's description (activity text). */
-  function setActiveActivity(text: string) {
-    patchActiveSeg({ activity: text });
-  }
-  /** "Erledigt": end the active booking, archive its source ToDo, back to ToDo view. */
-  function completeBooking() {
-    setState((s) => {
-      const seg = s.activeId ? s.segments.find((g) => g.id === s.activeId) : null;
-      if (!seg) return { tab: 'tasks' };
-      const segments = s.segments.map((g) => (g.id === s.activeId ? { ...g, end: vNow } : g));
-      const todos = seg.todoId ? s.todos.map((t) => (t.id === seg.todoId ? { ...t, archived: true } : t)) : s.todos;
-      return { segments, todos, activeId: null, paused: false, pausedPid: null, sheetSegId: null, fillGap: null, tab: 'tasks' };
-    });
-  }
-  /** "Schließen": end the active booking and return to ToDo view, but keep the ToDo.
-   *  Prompt for the activity only if nothing was described yet (empty desc + no subtasks). */
-  function closeBooking() {
-    setState((s) => {
-      if (!s.activeId) return { tab: 'tasks' };
-      const seg = s.segments.find((g) => g.id === s.activeId);
-      const segments = s.segments.map((g) => (g.id === s.activeId ? { ...g, end: vNow } : g));
-      if (seg && vNow - seg.start >= 1 && needsActivity(seg)) {
-        return { segments, activeId: null, paused: false, pausedPid: null, sheetSegId: seg.id, fillGap: null, tab: 'tasks' };
-      }
-      return { segments, activeId: null, paused: false, pausedPid: null, sheetSegId: null, fillGap: null, tab: 'tasks' };
-    });
-  }
 
   function setTime(edge: 'start' | 'end', total: number) {
     setState((s) => ({
@@ -675,7 +588,6 @@ export default function App() {
 
   // ---------- derived ----------
   const s = state;
-  const isTrack = s.tab === 'track';
   const isReport = s.tab === 'report';
   const isTasks = s.tab === 'tasks';
   const isAdmin = s.tab === 'admin';
@@ -684,28 +596,20 @@ export default function App() {
   const dateText = today.toLocaleDateString('de-DE', { weekday: 'short', day: 'numeric', month: 'long' });
   const clockText = fmtClock(vNow);
 
-  const activeSeg = s.activeId ? s.segments.find((g) => g.id === s.activeId) : null;
-  const running = !!activeSeg;
-  const bannerPid = running ? activeSeg!.pid : s.pausedPid;
-  const bannerProj = bannerPid ? proj(bannerPid) : null;
-
   const totals: Record<string, number> = {};
   s.projects.forEach((p) => {
     totals[p.id] = s.segments.filter((g) => g.pid === p.id).reduce((a, g) => a + (g.end - g.start), 0);
   });
-  const topId = s.projects.slice().sort((a, b) => totals[b.id] - totals[a.id])[0]?.id;
 
   const sheetSeg = s.sheetSegId ? s.segments.find((g) => g.id === s.sheetSegId) : null;
   const sheetProj = sheetSeg ? proj(sheetSeg.pid) : null;
 
-  // Bookings within the Archive's selected time slice (past days from the cloud,
-  // today's live bookings merged in), used to show time per completed task.
-  const archiveRange = periodRange(archivePeriod, s.custFrom, s.custTo, today);
-  const todayKey = localISODate();
-  const archiveDaySegments: DaySegment[] = [
-    ...archiveSegments.filter((seg) => seg.day !== todayKey),
-    ...s.segments.map((seg) => ({ ...seg, day: todayKey })),
-  ].filter((seg) => seg.day >= archiveRange.from && seg.day <= archiveRange.to);
+  // The task whose focus countdown is currently running (if any).
+  const runTodo = run ? s.todos.find((t) => t.id === run.todoId && !t.archived) ?? null : null;
+  // drop a stale countdown whose task was deleted/archived elsewhere
+  useEffect(() => {
+    if (run && !runTodo) setRun(null);
+  }, [run, runTodo]);
 
   // ---------- render ----------
   if (isSupabaseConfigured && !authReady) return <LoadingScreen text="Lädt …" />;
@@ -776,35 +680,6 @@ export default function App() {
 
         {/* Body */}
         <main className="tk-scroll" style={{ flex: '1 1 auto', minHeight: 0, overflowY: 'auto', background: C.lt1 }}>
-          {isTrack && (
-            <TrackView
-              state={s}
-              running={running}
-              activeSeg={activeSeg ?? null}
-              bannerProj={bannerProj ?? null}
-              totals={totals}
-              topId={topId}
-              onTapProject={tapProject}
-              onTogglePause={togglePause}
-              onSetLayout={(l) => setState({ tileLayout: l })}
-              onChecklistText={setChecklistText}
-              onChecklistToggle={toggleChecklistItem}
-              onChecklistAdd={addChecklistRow}
-              onChecklistMove={moveChecklistItem}
-              onSetStart={setActiveStart}
-              onSetActivity={setActiveActivity}
-              onSetPlannedEnd={setPlannedEnd}
-              onComplete={() =>
-                setConfirm({
-                  message: 'Buchung als erledigt abschließen und (falls verknüpft) die Aufgabe ins Archiv verschieben?',
-                  confirmLabel: 'Erledigt',
-                  onConfirm: completeBooking,
-                })
-              }
-              onCloseBooking={closeBooking}
-            />
-          )}
-
           {isReport && (
             <ReportView
               state={s}
@@ -824,9 +699,21 @@ export default function App() {
           {isTasks && (
             <DailyTasksView
               state={s}
+              countdown={
+                run && runTodo ? (
+                  <CountdownPanel
+                    todo={runTodo}
+                    startedAt={run.startedAt}
+                    onToggleItem={toggleRunChecklistItem}
+                    onDone={finishCountdown}
+                    onClose={cancelCountdown}
+                  />
+                ) : null
+              }
+              runningId={run?.todoId ?? null}
               onAdd={() => setTodoSheet('new')}
               onEdit={(t) => setTodoSheet(t)}
-              onTake={takeTodoToProject}
+              onStart={startCountdown}
               onComplete={(id) => {
                 const t = state.todos.find((x) => x.id === id);
                 setConfirm({
@@ -857,7 +744,7 @@ export default function App() {
               state={s}
               period={archivePeriod}
               onSetPeriod={setArchivePeriod}
-              daySegments={archiveDaySegments}
+              today={today}
               onEdit={(t) => setTodoSheet(t)}
               onRestore={unarchiveTodo}
             />
@@ -903,14 +790,6 @@ export default function App() {
             projects={s.projects}
             onSave={saveTodo}
             onDelete={todoSheet === 'new' ? undefined : () => deleteTodo(todoSheet.id)}
-            onTake={
-              todoSheet === 'new'
-                ? undefined
-                : (t) => {
-                    takeTodoToProject(t);
-                    setTodoSheet(null);
-                  }
-            }
             onClose={() => setTodoSheet(null)}
           />
         )}
@@ -960,9 +839,8 @@ function ConfirmDialog(props: { message: string; confirmLabel: string; onConfirm
 
 /* ===== shared detail form (Start/Zeit, Beschreibung, Aufgaben) ===== */
 /** The editable body of a booking detail: start + a second time field, the
- *  description and the subtask checklist. Rendered both inline for the running
- *  booking (TrackView) and inside the end-of-booking sheet (ActivitySheet),
- *  so both masks look and behave identically. */
+ *  description and the subtask checklist. Used by the Reporting booking sheet
+ *  (ActivitySheet) when editing a past booking. */
 function BookingDetailFields(props: {
   seg: Segment;
   textColor: string;
@@ -1061,328 +939,6 @@ function BookingDetailFields(props: {
         + Aufgabe
       </button>
     </>
-  );
-}
-
-/* ======================= BUCHUNGEN ======================= */function TrackView(props: {
-  state: AppState;
-  running: boolean;
-  activeSeg: Segment | null;
-  bannerProj: Project | null;
-  totals: Record<string, number>;
-  topId: string | undefined;
-  onTapProject: (pid: string) => void;
-  onTogglePause: () => void;
-  onSetLayout: (l: TileLayout) => void;
-  onChecklistText: (i: number, text: string) => void;
-  onChecklistToggle: (i: number) => void;
-  onChecklistAdd: () => void;
-  onChecklistMove: (i: number, dir: -1 | 1) => void;
-  onSetStart: (min: number) => void;
-  onSetActivity: (text: string) => void;
-  onSetPlannedEnd: (min: number | null) => void;
-  onComplete: () => void;
-  onCloseBooking: () => void;
-}) {
-  const { state: s, running, activeSeg, bannerProj, totals, topId, onTapProject, onTogglePause, onSetLayout, onChecklistText, onChecklistToggle, onChecklistAdd, onChecklistMove, onSetStart, onSetActivity, onSetPlannedEnd, onComplete, onCloseBooking } = props;
-
-  // ---- banner ----
-  let bannerBg: string;
-  let bannerBorder = 'none';
-  let bannerLabel: string;
-  let bannerLabelColor: string;
-  let bannerProject: string;
-  let bannerElapsed: string;
-  let bannerDot: CSSProperties;
-  let pauseLabel = '';
-  let pauseStyle: CSSProperties = { display: 'none' };
-  let bannerTextColor: string = C.lt1;
-  let bannerMutedColor = 'rgba(255,255,255,.6)';
-
-  if (running && activeSeg && bannerProj) {
-    bannerBg = bannerProj.color;
-    bannerLabel = 'Läuft';
-    bannerLabelColor = 'rgba(255,255,255,.85)';
-    bannerProject = bannerProj.code + '  ·  ' + bannerProj.name;
-    bannerElapsed = fmtDur(activeSeg.end - activeSeg.start);
-    bannerDot = { width: 8, height: 8, borderRadius: '50%', background: C.lt1, animation: 'tkPulse 1.4s ease-in-out infinite' };
-    pauseLabel = 'Pause';
-    pauseStyle = {
-      marginTop: 14,
-      width: '100%',
-      padding: 11,
-      background: 'rgba(255,255,255,.16)',
-      color: C.lt1,
-      fontSize: 13,
-      fontWeight: 700,
-      letterSpacing: '.06em',
-      textTransform: 'uppercase',
-    };
-  } else if (s.paused && bannerProj) {
-    bannerBg = C.dk1;
-    bannerLabel = 'Pausiert';
-    bannerLabelColor = 'rgba(255,255,255,.7)';
-    bannerProject = bannerProj.code + '  ·  ' + bannerProj.name;
-    const segp = s.segments.filter((g) => g.pid === bannerProj.id).reduce((a, g) => a + (g.end - g.start), 0);
-    bannerElapsed = fmtDur(segp);
-    bannerDot = { width: 8, height: 8, borderRadius: '50%', background: C.accent3_60 };
-    pauseLabel = 'Fortsetzen';
-    pauseStyle = {
-      marginTop: 14,
-      width: '100%',
-      padding: 11,
-      background: C.accent3,
-      color: C.lt1,
-      fontSize: 13,
-      fontWeight: 700,
-      letterSpacing: '.06em',
-      textTransform: 'uppercase',
-    };
-  } else {
-    bannerBg = C.lt2;
-    bannerBorder = '1px dashed #B9C4CB';
-    bannerLabel = 'Keine Erfassung';
-    bannerLabelColor = C.greyFooter;
-    bannerProject = 'Kein Projekt aktiv';
-    bannerElapsed = '0:00';
-    bannerTextColor = C.dk1;
-    bannerMutedColor = '#B9C4CB';
-    bannerDot = { width: 8, height: 8, borderRadius: '50%', background: '#B9C4CB' };
-  }
-
-  const layout = s.tileLayout;
-  const layoutDefs: [TileLayout, string, string][] = [
-    ['grid', '▦', 'Raster'],
-    ['sized', '▤', 'Gewichtet'],
-    ['list', '☰', 'Liste'],
-  ];
-
-  const trackHint = running
-    ? 'Tippe ein anderes Projekt, um zu wechseln – die laufende Buchung wird gestoppt und du erfasst die Tätigkeit.'
-    : s.paused
-      ? 'Erfassung pausiert. Tippe „Fortsetzen“ oder wähle direkt ein Projekt.'
-      : 'Tippe eine Projekt-Kachel, um die Zeiterfassung zu starten.';
-
-  const tileWrap: CSSProperties =
-    layout === 'list'
-      ? { display: 'flex', flexDirection: 'column', gap: 0, padding: '0 20px' }
-      : { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 0, padding: '0 20px' };
-
-  return (
-    <section>
-      {/* status banner */}
-      <div style={{ margin: '16px 20px 0', padding: '16px 18px', background: bannerBg, border: bannerBorder }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 14 }}>
-          <div style={{ minWidth: 0 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span style={bannerDot} />
-              <span
-                style={{
-                  fontSize: 11,
-                  letterSpacing: '.14em',
-                  textTransform: 'uppercase',
-                  fontWeight: 700,
-                  whiteSpace: 'nowrap',
-                  color: bannerLabelColor,
-                }}
-              >
-                {bannerLabel}
-              </span>
-            </div>
-            <div
-              style={{
-                fontSize: 19,
-                fontWeight: 700,
-                color: bannerTextColor,
-                marginTop: 4,
-                whiteSpace: 'nowrap',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-              }}
-            >
-              {bannerProject}
-            </div>
-          </div>
-          <div style={{ textAlign: 'right', flex: '0 0 auto' }}>
-            <div style={{ fontSize: 34, fontWeight: 300, color: bannerTextColor, fontVariantNumeric: 'tabular-nums', lineHeight: 1 }}>
-              {bannerElapsed}
-            </div>
-            <div style={{ fontSize: 10, letterSpacing: '.12em', textTransform: 'uppercase', color: bannerMutedColor }}>
-              Std : Min
-            </div>
-          </div>
-        </div>
-        {pauseStyle.display !== 'none' && (
-          <button type="button" onClick={onTogglePause} style={pauseStyle}>
-            {pauseLabel}
-          </button>
-        )}
-
-        {running && activeSeg && (
-          <div style={{ marginTop: 14, borderTop: '1px solid rgba(255,255,255,.25)', paddingTop: 12 }}>
-            <BookingDetailFields
-              seg={activeSeg}
-              textColor={bannerTextColor}
-              mutedColor={bannerMutedColor}
-              secondTimeLabel="Geplantes Ende"
-              secondTimeValue={activeSeg.plannedEnd ?? null}
-              secondTimeNullable={true}
-              onSetStart={onSetStart}
-              onSetSecondTime={onSetPlannedEnd}
-              onSetActivity={onSetActivity}
-              onChecklistText={onChecklistText}
-              onChecklistToggle={onChecklistToggle}
-              onChecklistAdd={onChecklistAdd}
-              onChecklistMove={onChecklistMove}
-            />
-
-            {needsActivity(activeSeg) && (
-              <div style={{ fontSize: 12, color: bannerMutedColor, marginTop: 14 }}>
-                Bitte zuerst eine Beschreibung oder eine Aufgabe erfassen, um die Buchung abzuschließen.
-              </div>
-            )}
-            <div style={{ display: 'flex', gap: 10, marginTop: needsActivity(activeSeg) ? 8 : 14 }}>
-              <button
-                type="button"
-                onClick={onCloseBooking}
-                disabled={needsActivity(activeSeg)}
-                style={{ flex: 1, padding: 12, background: 'rgba(255,255,255,.18)', color: bannerTextColor, fontSize: 14, fontWeight: 700, letterSpacing: '.04em', textTransform: 'uppercase', opacity: needsActivity(activeSeg) ? 0.4 : 1, cursor: needsActivity(activeSeg) ? 'not-allowed' : 'pointer' }}
-              >
-                Schließen
-              </button>
-              <button
-                type="button"
-                onClick={onComplete}
-                disabled={needsActivity(activeSeg)}
-                style={{ flex: 1, padding: 12, background: C.lt1, color: C.accent1, fontSize: 14, fontWeight: 700, letterSpacing: '.04em', textTransform: 'uppercase', opacity: needsActivity(activeSeg) ? 0.4 : 1, cursor: needsActivity(activeSeg) ? 'not-allowed' : 'pointer' }}
-              >
-                Erledigt
-              </button>
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* layout switcher */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 20px 10px' }}>
-        <span style={{ fontSize: 11, letterSpacing: '.14em', textTransform: 'uppercase', color: C.greyFooter, fontWeight: 700 }}>
-          Projekte
-        </span>
-        <div style={{ display: 'flex', border: '1px solid #D5DBDF', background: C.lt2 }}>
-          {layoutDefs.map(([k, icon, title]) => (
-            <button
-              key={k}
-              type="button"
-              title={title}
-              onClick={() => onSetLayout(k)}
-              style={{
-                padding: '7px 12px',
-                fontSize: 14,
-                color: layout === k ? C.lt1 : C.greyFooter,
-                background: layout === k ? C.accent1 : 'transparent',
-              }}
-            >
-              {icon}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* tiles */}
-      <div style={tileWrap}>
-        {s.projects.map((p) => {
-          const isActive = running && activeSeg!.pid === p.id;
-          const isPaused = s.paused && s.pausedPid === p.id;
-          const tc = textOn(p.color);
-          const tot = totals[p.id];
-          const metaText = tot > 0 ? fmtDur(tot) + ' h' : '–';
-          const ring: CSSProperties = isActive
-            ? { boxShadow: 'inset 0 0 0 3px #FEFFFF, inset 0 0 0 5px ' + p.color }
-            : isPaused
-              ? { boxShadow: 'inset 0 0 0 2px #7BBEE0' }
-              : {};
-
-          if (layout === 'list') {
-            return (
-              <button
-                key={p.id}
-                type="button"
-                onClick={() => onTapProject(p.id)}
-                style={{
-                  position: 'relative',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 14,
-                  padding: '15px 16px',
-                  background: p.color,
-                  color: tc,
-                  borderBottom: '1px solid rgba(255,255,255,.14)',
-                  ...ring,
-                }}
-              >
-                {isActive && (
-                  <span style={{ width: 9, height: 9, borderRadius: '50%', background: tc, animation: 'tkPulse 1.4s infinite' }} />
-                )}
-                <span style={{ display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0, textAlign: 'left' }}>
-                  <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.12em', textTransform: 'uppercase', opacity: 0.7, color: tc }}>
-                    {p.code}
-                  </span>
-                  <span style={{ fontSize: 16, fontWeight: 700, color: tc, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                    {p.name}
-                  </span>
-                </span>
-                <span style={{ marginLeft: 'auto', fontSize: 14, fontWeight: 300, fontVariantNumeric: 'tabular-nums', color: tc, opacity: 0.9 }}>
-                  {metaText}
-                </span>
-              </button>
-            );
-          }
-
-          const big = layout === 'sized' && p.id === topId;
-          return (
-            <button
-              key={p.id}
-              type="button"
-              onClick={() => onTapProject(p.id)}
-              style={{
-                position: 'relative',
-                display: 'flex',
-                flexDirection: 'column',
-                justifyContent: 'space-between',
-                alignItems: 'flex-start',
-                padding: '14px 15px',
-                background: p.color,
-                color: tc,
-                outline: '1px solid rgba(255,255,255,.16)',
-                outlineOffset: '-0.5px',
-                gridColumn: big ? 'span 2' : undefined,
-                minHeight: big ? 108 : 128,
-                ...ring,
-              }}
-            >
-              {isActive && (
-                <span
-                  style={{ position: 'absolute', top: 14, right: 14, width: 9, height: 9, borderRadius: '50%', background: tc, animation: 'tkPulse 1.4s infinite' }}
-                />
-              )}
-              <span style={{ display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0, textAlign: 'left' }}>
-                <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.1em', textTransform: 'uppercase', opacity: 0.72, color: tc }}>
-                  {p.code}
-                </span>
-                <span style={{ fontSize: big ? 19 : 16, fontWeight: 700, color: tc, lineHeight: 1.12 }}>{p.name}</span>
-              </span>
-              <span style={{ fontSize: 13, fontWeight: 300, fontVariantNumeric: 'tabular-nums', color: tc, opacity: 0.9 }}>
-                {metaText}
-              </span>
-            </button>
-          );
-        })}
-      </div>
-
-      <div style={{ padding: '6px 20px 30px' }}>
-        <p style={{ fontSize: 12, lineHeight: 1.5, color: C.greyFooter, margin: 0 }}>{trackHint}</p>
-      </div>
-    </section>
   );
 }
 
@@ -1922,7 +1478,6 @@ function BottomNav({ tab, onSelect }: { tab: Tab; onSelect: (t: Tab) => void }) 
   );
   const items: [Tab, string, React.ReactNode][] = [
     ['tasks', 'Daily Tasks', checklist],
-    ['track', 'Buchungen', '▣'],
     ['report', 'Reporting', '▥'],
     ['archiv', 'Archiv', archiveIcon],
     ['admin', 'Pflege', wrench],
@@ -2108,6 +1663,98 @@ function GapFillSheet(props: { gap: Gap; projects: Project[]; onPick: (pid: stri
   );
 }
 
+/* ======================= FOCUS COUNTDOWN ======================= */
+/** Format a (possibly negative) number of seconds as M:SS / H:MM:SS. */
+function fmtCountdown(totalSec: number): string {
+  const sign = totalSec < 0 ? '+' : '';
+  const sec = Math.abs(totalSec);
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const ss = sec % 60;
+  const mm = h > 0 ? String(m).padStart(2, '0') : String(m);
+  return sign + (h > 0 ? `${h}:${mm}:${String(ss).padStart(2, '0')}` : `${mm}:${String(ss).padStart(2, '0')}`);
+}
+
+/** The focus-countdown panel shown above the task list while a task runs:
+ *  planned time counting down (into overtime when overrun), the task and its
+ *  sub-activities, plus "Erledigt" / "Schließen". */
+function CountdownPanel(props: {
+  todo: Todo;
+  startedAt: number;
+  onToggleItem: (i: number) => void;
+  onDone: () => void;
+  onClose: () => void;
+}) {
+  const { todo, startedAt, onToggleItem, onDone, onClose } = props;
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setTick((x) => x + 1), 1000);
+    return () => clearInterval(t);
+  }, []);
+
+  const elapsedSec = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+  const remainingSec = todo.plannedMin * 60 - elapsedSec;
+  const overtime = remainingSec < 0;
+  const timeColor = overtime ? C.critical : C.accent1;
+  const items = todo.checklist ?? [];
+
+  return (
+    <div style={{ border: '1px solid ' + timeColor, borderLeft: '4px solid ' + timeColor, background: C.lt2, padding: '14px 16px', marginBottom: 18 }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 14 }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 10, letterSpacing: '.14em', textTransform: 'uppercase', color: timeColor, fontWeight: 700 }}>
+            {overtime ? 'Überzeit' : 'Fokus läuft'}
+          </div>
+          <div style={{ fontSize: 16, fontWeight: 700, color: C.dk1, marginTop: 4, wordBreak: 'break-word' }}>
+            {todo.title.trim() === '' ? '(ohne Titel)' : todo.title}
+          </div>
+          <div style={{ fontSize: 11, color: C.greyFooter, marginTop: 3 }}>
+            {CATEGORY_LABELS[todo.category]} &nbsp;·&nbsp; geplant {fmtDur(todo.plannedMin)} h
+          </div>
+        </div>
+        <div style={{ textAlign: 'right', flex: '0 0 auto' }}>
+          <div style={{ fontSize: 38, fontWeight: 300, color: timeColor, fontVariantNumeric: 'tabular-nums', lineHeight: 1 }}>
+            {fmtCountdown(remainingSec)}
+          </div>
+          <div style={{ fontSize: 10, letterSpacing: '.12em', textTransform: 'uppercase', color: C.greyFooter }}>
+            {overtime ? 'über Plan' : 'verbleibend'}
+          </div>
+        </div>
+      </div>
+
+      {items.some((c) => c.text.trim() !== '') && (
+        <div style={{ marginTop: 12, borderTop: '1px solid #E1E5E8', paddingTop: 10, display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {items.map((it, i) =>
+            it.text.trim() === '' ? null : (
+              <label key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                <input type="checkbox" checked={it.done} onChange={() => onToggleItem(i)} style={{ width: 18, height: 18, flex: '0 0 auto' }} />
+                <span style={{ fontSize: 14, color: it.done ? C.muted : C.dk1, textDecoration: it.done ? 'line-through' : 'none', wordBreak: 'break-word' }}>{it.text}</span>
+              </label>
+            ),
+          )}
+        </div>
+      )}
+
+      <div style={{ display: 'flex', gap: 10, marginTop: 14 }}>
+        <button
+          type="button"
+          onClick={onDone}
+          style={{ flex: 2, padding: 12, background: '#2E8B3D', color: C.lt1, fontSize: 14, fontWeight: 700, letterSpacing: '.04em', textTransform: 'uppercase' }}
+        >
+          Erledigt
+        </button>
+        <button
+          type="button"
+          onClick={onClose}
+          style={{ flex: 1, padding: 12, background: C.lt1, color: C.dk1, border: '1px solid #D5DBDF', fontSize: 14, fontWeight: 700, letterSpacing: '.04em', textTransform: 'uppercase' }}
+        >
+          Schließen
+        </button>
+      </div>
+    </div>
+  );
+}
+
 /* ======================= DAILY TASKS ======================= */
 type TaskSortKey = 'title' | 'dauer' | 'urgency' | 'importance' | 'prio';
 
@@ -2128,12 +1775,16 @@ const taskNumCell: CSSProperties = {
 
 function DailyTasksView(props: {
   state: AppState;
+  /** the focus-countdown panel, rendered above the list while a task is running */
+  countdown: React.ReactNode;
+  /** id of the task whose countdown is currently running (null = none) */
+  runningId: string | null;
   onAdd: () => void;
   onEdit: (t: Todo) => void;
-  onTake: (t: Todo) => void;
+  onStart: (t: Todo) => void;
   onComplete: (id: string) => void;
 }) {
-  const { state: s, onAdd, onEdit, onTake, onComplete } = props;
+  const { state: s, countdown, runningId, onAdd, onEdit, onStart, onComplete } = props;
   const provisional = s.todos.filter((t) => !t.archived && t.title.trim() === '');
   const [sortKey, setSortKey] = useState<TaskSortKey>('prio');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
@@ -2190,34 +1841,37 @@ function DailyTasksView(props: {
     );
   };
 
-  const takeButton = (t: Todo) => (
-    <button
-      type="button"
-      onClick={(e) => {
-        e.stopPropagation();
-        onTake(t);
-      }}
-      disabled={!t.projectId}
-      title={t.projectId ? 'In Projektübersicht übernehmen' : 'Erst ein Projekt auswählen'}
-      style={{
-        flex: '0 0 auto',
-        display: 'inline-flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        width: 30,
-        height: 30,
-        padding: 0,
-        border: '1px solid ' + (t.projectId ? C.accent1 : '#E1E5E8'),
-        background: t.projectId ? C.lt1 : '#F7F8F9',
-        color: t.projectId ? C.accent1 : '#C7CFD4',
-        cursor: t.projectId ? 'pointer' : 'not-allowed',
-      }}
-    >
-      <svg width={15} height={15} viewBox="0 0 24 24" aria-hidden="true">
-        <path d="M8 5v14l11-7z" fill="currentColor" />
-      </svg>
-    </button>
-  );
+  const startButton = (t: Todo) => {
+    const on = runningId === t.id;
+    return (
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          if (!on) onStart(t);
+        }}
+        disabled={on}
+        title={on ? 'Countdown läuft' : 'Countdown starten'}
+        style={{
+          flex: '0 0 auto',
+          display: 'inline-flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          width: 30,
+          height: 30,
+          padding: 0,
+          border: '1px solid ' + C.accent1,
+          background: on ? C.accent1 : C.lt1,
+          color: on ? C.lt1 : C.accent1,
+          cursor: on ? 'default' : 'pointer',
+        }}
+      >
+        <svg width={15} height={15} viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M8 5v14l11-7z" fill="currentColor" />
+        </svg>
+      </button>
+    );
+  };
 
   const erledigtButton = (t: Todo) => (
     <button
@@ -2306,7 +1960,7 @@ function DailyTasksView(props: {
                   <td style={{ ...taskNumCell, color: C.dk1, fontWeight: 700 }}>{t.urgency + t.importance + 2}</td>
                   <td style={{ ...taskCellStyle, padding: '6px 2px' }}>
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
-                      {takeButton(t)}
+                      {startButton(t)}
                       {erledigtButton(t)}
                     </div>
                   </td>
@@ -2330,6 +1984,8 @@ function DailyTasksView(props: {
           + Aufgabe
         </button>
       </div>
+
+      {countdown}
 
       {s.todos.filter((t) => !t.archived).length === 0 ? (
         <div style={{ fontSize: 13, color: C.muted, padding: '8px 0' }}>Noch keine Aufgaben – lege mit „+ Aufgabe" eine an.</div>
@@ -2355,7 +2011,7 @@ function DailyTasksView(props: {
                       <span style={{ fontSize: 13, color: C.muted }}>(ohne Titel)</span>
                     )}
                     <span style={{ flex: '1 1 auto' }} />
-                    {takeButton(t)}
+                    {startButton(t)}
                     {erledigtButton(t)}
                   </div>
                 ))}
@@ -2386,33 +2042,26 @@ function ArchiveView(props: {
   state: AppState;
   period: ReportPeriod;
   onSetPeriod: (p: ReportPeriod) => void;
-  daySegments: DaySegment[];
+  today: Date;
   onEdit: (t: Todo) => void;
   onRestore: (id: string) => void;
 }) {
-  const { state: s, period, onSetPeriod, daySegments, onEdit, onRestore } = props;
+  const { state: s, period, onSetPeriod, today, onEdit, onRestore } = props;
   const archived = s.todos.filter((t) => t.archived);
-  const archivedIds = new Set(archived.map((t) => t.id));
 
-  // group the slice's bookings by the (archived) task they belong to
-  const byTodo = new Map<string, DaySegment[]>();
-  for (const seg of daySegments) {
-    if (!seg.todoId || !archivedIds.has(seg.todoId)) continue;
-    const arr = byTodo.get(seg.todoId);
-    if (arr) arr.push(seg);
-    else byTodo.set(seg.todoId, [seg]);
-  }
-  const totalMin = [...byTodo.values()].flat().reduce((a, seg) => a + Math.max(0, seg.end - seg.start), 0);
+  // Filter by completion day within the selected slice. Legacy tasks without a
+  // completion date are always shown (sorted last) so nothing gets lost.
+  const { from, to } = periodRange(period, s.custFrom, s.custTo, today);
+  const shown = archived.filter((t) => !t.completedAt || (t.completedAt >= from && t.completedAt <= to));
+  shown.sort((a, b) => {
+    if (a.completedAt && b.completedAt) return a.completedAt < b.completedAt ? 1 : a.completedAt > b.completedAt ? -1 : 0;
+    if (a.completedAt) return -1;
+    if (b.completedAt) return 1;
+    return 0;
+  });
 
-  const summary = (t: Todo) => {
-    const segs = byTodo.get(t.id);
-    if (!segs || segs.length === 0) return null;
-    const dur = segs.reduce((a, x) => a + Math.max(0, x.end - x.start), 0);
-    const days = [...new Set(segs.map((x) => x.day))].sort();
-    const start = Math.min(...segs.map((x) => x.start));
-    const end = Math.max(...segs.map((x) => x.end));
-    return { dur, days, start, end };
-  };
+  const totalPlanned = shown.reduce((a, t) => a + (t.actualMin != null ? t.plannedMin : 0), 0);
+  const totalActual = shown.reduce((a, t) => a + (t.actualMin ?? 0), 0);
 
   const periodDefs: [ReportPeriod, string][] = [
     ['woche', 'Woche'],
@@ -2420,29 +2069,16 @@ function ArchiveView(props: {
     ['jahr', 'Jahr'],
   ];
 
-  // tasks with time in the slice first (newest), then the rest
-  const withTime = archived.filter((t) => byTodo.has(t.id));
-  const withoutTime = archived.filter((t) => !byTodo.has(t.id));
-  withTime.sort((a, b) => {
-    const sa = summary(a)!;
-    const sb = summary(b)!;
-    const da = sa.days[sa.days.length - 1];
-    const db = sb.days[sb.days.length - 1];
-    if (da !== db) return da < db ? 1 : -1;
-    return sb.start - sa.start;
-  });
-  const ordered = [...withTime, ...withoutTime];
-
   return (
     <section style={{ padding: '18px 20px 36px' }}>
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 14, marginBottom: 16 }}>
         <div>
           <div style={{ fontSize: 11, letterSpacing: '.14em', textTransform: 'uppercase', color: C.greyFooter, fontWeight: 700 }}>Archiv</div>
-          <div style={{ fontSize: 13, color: C.greyFooter, marginTop: 3 }}>Erledigte Aufgaben ({archived.length})</div>
+          <div style={{ fontSize: 13, color: C.greyFooter, marginTop: 3 }}>Erledigte Aufgaben ({shown.length})</div>
         </div>
         <div style={{ textAlign: 'right', flex: '0 0 auto' }}>
-          <div style={{ fontSize: 28, fontWeight: 300, color: C.accent1, fontVariantNumeric: 'tabular-nums', lineHeight: 1 }}>{fmtDur(totalMin)}</div>
-          <div style={{ fontSize: 10, letterSpacing: '.1em', textTransform: 'uppercase', color: C.greyFooter }}>Std im Zeitraum</div>
+          <div style={{ fontSize: 28, fontWeight: 300, color: C.accent1, fontVariantNumeric: 'tabular-nums', lineHeight: 1 }}>{fmtDur(totalActual)}</div>
+          <div style={{ fontSize: 10, letterSpacing: '.1em', textTransform: 'uppercase', color: C.greyFooter }}>Benötigt (Plan {fmtDur(totalPlanned)})</div>
         </div>
       </div>
 
@@ -2459,14 +2095,16 @@ function ArchiveView(props: {
         ))}
       </div>
 
-      {archived.length === 0 ? (
-        <div style={{ fontSize: 13, color: C.muted, padding: '8px 0' }}>Noch keine erledigten Aufgaben.</div>
+      {shown.length === 0 ? (
+        <div style={{ fontSize: 13, color: C.muted, padding: '8px 0' }}>Keine erledigten Aufgaben in diesem Zeitraum.</div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {ordered.map((t) => {
+          {shown.map((t) => {
             const items = (t.checklist ?? []).filter((c) => c.text.trim() !== '');
             const done = items.filter((c) => c.done).length;
-            const sum = summary(t);
+            const timed = t.actualMin != null;
+            const diff = timed ? t.actualMin! - t.plannedMin : 0;
+            const diffColor = diff > 0 ? C.critical : '#2E8B3D';
             return (
               <div
                 key={t.id}
@@ -2479,16 +2117,23 @@ function ArchiveView(props: {
                   </div>
                   <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>
                     {CATEGORY_LABELS[t.category]}
+                    {t.completedAt && <span> &nbsp;·&nbsp; {fmtDayShort(t.completedAt)}</span>}
                     {items.length > 0 && <span> &nbsp;·&nbsp; ✓ {done}/{items.length}</span>}
                   </div>
-                  {sum ? (
-                    <div style={{ fontSize: 12, color: C.accent1, fontWeight: 700, marginTop: 4, fontVariantNumeric: 'tabular-nums' }}>
-                      {fmtDayShort(sum.days[0])}
-                      {sum.days.length > 1 ? ' …' : ''} &nbsp;·&nbsp; {fmtClock(sum.start)}–{fmtClock(sum.end)} &nbsp;·&nbsp; {fmtDur(sum.dur)} h
-                    </div>
-                  ) : (
-                    <div style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>Keine Buchung in diesem Zeitraum</div>
-                  )}
+                  <div style={{ fontSize: 12, marginTop: 4, fontVariantNumeric: 'tabular-nums' }}>
+                    <span style={{ color: C.greyFooter }}>Plan {fmtDur(t.plannedMin)}</span>
+                    {timed ? (
+                      <>
+                        <span style={{ color: C.greyFooter }}> &nbsp;·&nbsp; </span>
+                        <span style={{ color: C.dk1, fontWeight: 700 }}>Ist {fmtDur(t.actualMin!)}</span>
+                        {diff !== 0 && (
+                          <span style={{ color: diffColor, fontWeight: 700 }}> &nbsp;({diff > 0 ? '+' : '−'}{fmtDur(Math.abs(diff))})</span>
+                        )}
+                      </>
+                    ) : (
+                      <span style={{ color: C.muted }}> &nbsp;·&nbsp; ohne Zeitmessung</span>
+                    )}
+                  </div>
                 </div>
                 <button
                   type="button"
@@ -2541,10 +2186,9 @@ function TodoSheet(props: {
   projects: Project[];
   onSave: (t: Todo) => void;
   onDelete?: () => void;
-  onTake?: (t: Todo) => void;
   onClose: () => void;
 }) {
-  const { initial, projects, onSave, onDelete, onTake, onClose } = props;
+  const { initial, projects, onSave, onDelete, onClose } = props;
   const [title, setTitle] = useState(initial?.title ?? '');
   const [category, setCategory] = useState<TodoCategory>(initial?.category ?? 'projekt');
   const [projectId, setProjectId] = useState<string | null>(initial?.projectId ?? null);
@@ -2715,29 +2359,6 @@ function TodoSheet(props: {
             <button type="button" onClick={onClose} style={{ flex: 1, padding: 13, background: C.lt2, color: C.dk1, fontSize: 14, fontWeight: 700 }}>Abbrechen</button>
             <button type="button" onClick={save} disabled={!canSave} style={{ flex: 2, padding: 13, background: canSave ? C.accent1 : '#C7CFD4', color: C.lt1, fontSize: 14, fontWeight: 700, cursor: canSave ? 'pointer' : 'not-allowed' }}>Speichern</button>
           </div>
-
-          {onTake && (
-            <button
-              type="button"
-              onClick={() => onTake(current())}
-              disabled={!projectId}
-              title={projectId ? 'Buchung auf diesem Projekt starten' : 'Erst ein Projekt auswählen'}
-              style={{
-                width: '100%',
-                marginTop: 10,
-                padding: 12,
-                border: '1px solid ' + (projectId ? C.accent2 : '#D5DBDF'),
-                background: C.lt1,
-                color: projectId ? C.accent2 : '#B9C4CB',
-                fontSize: 13,
-                fontWeight: 700,
-                letterSpacing: '.04em',
-                cursor: projectId ? 'pointer' : 'not-allowed',
-              }}
-            >
-              In Projektsicht übernehmen
-            </button>
-          )}
 
           {onDelete &&
             (confirmDelete ? (

@@ -142,6 +142,8 @@ interface DbTodo {
   category: string;
   project_id: string | null;
   planned_min: number;
+  actual_min?: number | null;
+  completed_at?: string | null;
   urgency: number;
   importance: number;
   drawing?: string | null;
@@ -161,6 +163,8 @@ export async function loadTodos(): Promise<Todo[]> {
     category: t.category as TodoCategory,
     projectId: t.project_id,
     plannedMin: t.planned_min,
+    actualMin: t.actual_min ?? null,
+    completedAt: t.completed_at ?? null,
     urgency: t.urgency,
     importance: t.importance,
     drawing: t.drawing ?? null,
@@ -189,6 +193,8 @@ export async function syncTodos(todos: Todo[]): Promise<void> {
         category: t.category,
         project_id: t.projectId,
         planned_min: t.plannedMin,
+        actual_min: t.actualMin ?? null,
+        completed_at: t.completedAt ?? null,
         urgency: t.urgency,
         importance: t.importance,
         drawing: t.drawing,

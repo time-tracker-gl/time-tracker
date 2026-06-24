@@ -33,7 +33,7 @@ export interface DaySegment extends Segment {
   day: string;
 }
 
-export type Tab = 'track' | 'report' | 'tasks' | 'admin' | 'archiv';
+export type Tab = 'report' | 'tasks' | 'admin' | 'archiv';
 
 export type TodoCategory = 'projekt' | 'akquise' | 'intern';
 
@@ -49,6 +49,12 @@ export interface Todo {
   projectId: string | null;
   /** planned duration in minutes */
   plannedMin: number;
+  /** actually needed duration in minutes, measured by the focus countdown when the
+   *  task was completed via "Erledigt"; null = completed without timing. */
+  actualMin?: number | null;
+  /** day the task was archived/completed (YYYY-MM-DD); drives the Archive's time
+   *  slice filter now that tasks no longer create bookings. */
+  completedAt?: string | null;
   urgency: number;
   importance: number;
   /** optional hand-drawn sketch as a PNG data URL (no recognition) */
