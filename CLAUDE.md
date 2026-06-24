@@ -1,8 +1,8 @@
 # Projekt-Notizen für Claude
 
 App „rpc Zeiterfassung" – Vite + React + TypeScript, mobile Zeiterfassung.
-Persistenz/Login über Supabase (Magic-Link, Row Level Security); ohne gültige
-Supabase-Konfiguration lokaler Fallback (`localStorage`).
+Persistenz/Login über Supabase (E-Mail + Passwort, Row Level Security); ohne
+gültige Supabase-Konfiguration lokaler Fallback (`localStorage`).
 
 ## Arbeitsweise / Merge-Workflow
 
