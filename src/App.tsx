@@ -1740,9 +1740,12 @@ function TodoSheet(props: {
           {label('Projekt (optional)')}
           <select value={projectId ?? ''} onChange={(e) => setProjectId(e.target.value || null)} style={{ width: '100%', border: '1px solid #D5DBDF', padding: '11px 12px', fontSize: 14, color: C.dk1, background: C.lt2, outline: 'none' }}>
             <option value="">— keins —</option>
-            {projects.map((p) => (
-              <option key={p.id} value={p.id}>{p.code} · {p.name}</option>
-            ))}
+            {projects
+              .slice()
+              .sort((a, b) => `${a.code} · ${a.name}`.localeCompare(`${b.code} · ${b.name}`, 'de', { sensitivity: 'base' }))
+              .map((p) => (
+                <option key={p.id} value={p.id}>{p.code} · {p.name}</option>
+              ))}
           </select>
 
           {label('Geplante Dauer (Minuten)')}
