@@ -118,6 +118,12 @@ function moveItem<T>(arr: T[], i: number, dir: -1 | 1): T[] {
   return next;
 }
 
+/** Stable reorder of a checklist: open items keep their order at the top, done
+ *  items sink to the end (also keeping their relative order). */
+function sinkDone(cl: ChecklistItem[]): ChecklistItem[] {
+  return [...cl.filter((c) => !c.done), ...cl.filter((c) => c.done)];
+}
+
 /** Three empty checklist rows for a fresh project detail view. */
 function emptyChecklist(): ChecklistItem[] {
   return [
@@ -436,7 +442,7 @@ export default function App() {
     const id = run.todoId;
     setState((s) => ({
       todos: s.todos.map((t) =>
-        t.id === id ? { ...t, checklist: (t.checklist ?? []).map((c, idx) => (idx === i ? { ...c, done: !c.done } : c)) } : t,
+        t.id === id ? { ...t, checklist: sinkDone((t.checklist ?? []).map((c, idx) => (idx === i ? { ...c, done: !c.done } : c))) } : t,
       ),
     }));
   }
@@ -1694,7 +1700,7 @@ function TodoSheet(props: {
                 <input
                   type="checkbox"
                   checked={it.done}
-                  onChange={() => setChecklist((cl) => cl.map((c, idx) => (idx === i ? { ...c, done: !c.done } : c)))}
+                  onChange={() => setChecklist((cl) => sinkDone(cl.map((c, idx) => (idx === i ? { ...c, done: !c.done } : c))))}
                   style={{ width: 18, height: 18, flex: '0 0 auto' }}
                 />
                 <input
@@ -1718,7 +1724,7 @@ function TodoSheet(props: {
           </div>
           <button
             type="button"
-            onClick={() => setChecklist((cl) => cl.concat([{ text: '', done: false }]))}
+            onClick={() => setChecklist((cl) => [{ text: '', done: false }, ...cl])}
             style={{ marginTop: 8, padding: '7px 12px', background: C.lt2, color: C.dk1, fontSize: 12, fontWeight: 700 }}
           >
             + Aktivität
