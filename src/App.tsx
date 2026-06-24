@@ -7,6 +7,7 @@ import { aggregate, periodRange } from './lib/aggregate';
 import { DrawingPad } from './components/DrawingPad';
 import { isSupabaseConfigured, supabase } from './lib/supabase';
 import { Login } from './components/Login';
+import { SetPassword } from './components/SetPassword';
 import {
   loadProjects,
   loadSegments,
@@ -186,6 +187,9 @@ export default function App() {
   // Cloud (Supabase) auth + sync state. In local mode these are pre-satisfied.
   const [authReady, setAuthReady] = useState(!isSupabaseConfigured);
   const [userEmail, setUserEmail] = useState<string | null>(null);
+  // True while the user arrived via a password-recovery link – then we show the
+  // "set new password" screen instead of the app, even though a session exists.
+  const [recovery, setRecovery] = useState(false);
   const [dataLoaded, setDataLoaded] = useState(!isSupabaseConfigured);
   const lastSyncRef = useRef('');
 
@@ -213,7 +217,8 @@ export default function App() {
       setUserEmail(data.session?.user?.email ?? null);
       setAuthReady(true);
     });
-    const { data: sub } = supabase.auth.onAuthStateChange((_e, session) => {
+    const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'PASSWORD_RECOVERY') setRecovery(true);
       setUserEmail(session?.user?.email ?? null);
       setAuthReady(true);
       if (!session) {
@@ -704,6 +709,7 @@ export default function App() {
 
   // ---------- render ----------
   if (isSupabaseConfigured && !authReady) return <LoadingScreen text="Lädt …" />;
+  if (isSupabaseConfigured && recovery) return <SetPassword onDone={() => setRecovery(false)} />;
   if (isSupabaseConfigured && !userEmail) return <Login />;
   if (isSupabaseConfigured && !dataLoaded) return <LoadingScreen text="Daten werden geladen …" />;
 
