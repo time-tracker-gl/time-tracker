@@ -1,9 +1,8 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
-import type { ChecklistItem, DaySegment, Gap, Project, ReportPeriod, Segment, Tab, TileLayout, Todo, TodoCategory } from './types';
+import type { ChecklistItem, Gap, Project, ReportPeriod, Segment, Tab, TileLayout, Todo, TodoCategory } from './types';
 import { C, PALETTE } from './theme';
-import { fmtClock, fmtDur, nowMinutes, textOn } from './lib/time';
-import { buildReport, PPM } from './lib/report';
-import { aggregate, periodRange } from './lib/aggregate';
+import { fmtClock, fmtDur, nowMinutes } from './lib/time';
+import { periodRange } from './lib/aggregate';
 import { DrawingPad } from './components/DrawingPad';
 import { isSupabaseConfigured, supabase } from './lib/supabase';
 import { Login } from './components/Login';
@@ -11,7 +10,6 @@ import { SetPassword } from './components/SetPassword';
 import {
   loadProjects,
   loadSegments,
-  loadSegmentsRange,
   loadTodos,
   localISODate,
   seedDefaultProjects,
@@ -120,27 +118,6 @@ function moveItem<T>(arr: T[], i: number, dir: -1 | 1): T[] {
   return next;
 }
 
-/** A finished booking still needs the activity-capture sheet only if nothing was
- *  described yet: no description text and no checklist item with content. */
-function needsActivity(seg: Segment): boolean {
-  return seg.activity.trim() === '' && !(seg.checklist ?? []).some((c) => c.text.trim() !== '');
-}
-
-/** Earliest start a booking may have without overlapping the booking to its left:
- *  the latest end among other bookings that lie before `start`. */
-function leftBound(segs: Segment[], id: string, start: number): number {
-  let lo = 0;
-  for (const o of segs) if (o.id !== id && o.end <= start && o.end > lo) lo = o.end;
-  return lo;
-}
-/** Latest end a booking may have without overlapping the booking to its right:
- *  the earliest start among other bookings that lie after `end`. */
-function rightBound(segs: Segment[], id: string, end: number): number {
-  let hi = 24 * 60;
-  for (const o of segs) if (o.id !== id && o.start >= end && o.start < hi) hi = o.start;
-  return hi;
-}
-
 /** Three empty checklist rows for a fresh project detail view. */
 function emptyChecklist(): ChecklistItem[] {
   return [
@@ -193,7 +170,7 @@ function initialState(): AppState {
     sheetSegId: null,
     tileLayout: persisted?.tileLayout ?? 'grid',
     fillGap: null,
-    reportPeriod: 'heute',
+    reportPeriod: 'woche',
     custFrom: isoDate(new Date(today.getFullYear(), today.getMonth(), 1)),
     custTo: isoDate(today),
   };
@@ -204,7 +181,6 @@ type Updater = Partial<AppState> | ((prev: AppState) => Partial<AppState>);
 export default function App() {
   const [state, setStateRaw] = useState<AppState>(initialState);
   const [vNow, setVNow] = useState<number>(() => nowMinutes());
-  const dragMoved = useRef(false);
 
   // Cloud (Supabase) auth + sync state. In local mode these are pre-satisfied.
   const [authReady, setAuthReady] = useState(!isSupabaseConfigured);
@@ -215,9 +191,6 @@ export default function App() {
   const [dataLoaded, setDataLoaded] = useState(!isSupabaseConfigured);
   const lastSyncRef = useRef('');
 
-  // Bookings for the active Reporting range (Woche/Monat/Jahr/Zeitraum). Today's
-  // live bookings are merged in at render time, so only past days are fetched here.
-  const [reportSegments, setReportSegments] = useState<DaySegment[]>([]);
   // Archive (completed tasks) time-slice filter (Woche/Monat/Jahr).
   const [archivePeriod, setArchivePeriod] = useState<ReportPeriod>('monat');
 
@@ -326,30 +299,6 @@ export default function App() {
     return () => clearTimeout(t);
   }, [state.projects, state.segments, state.todos, userEmail, dataLoaded]);
 
-  // load the bookings for the selected aggregated report range from Supabase
-  useEffect(() => {
-    if (state.tab !== 'report' || state.reportPeriod === 'heute') return;
-    if (!isSupabaseConfigured) {
-      setReportSegments([]); // local mode: only today (merged in at render)
-      return;
-    }
-    if (!userEmail || !dataLoaded) return;
-    const { from, to } = periodRange(state.reportPeriod, state.custFrom, state.custTo, new Date());
-    let active = true;
-    (async () => {
-      try {
-        const segs = await loadSegmentsRange(from, to);
-        if (active) setReportSegments(segs);
-      } catch (e) {
-        console.error('Supabase range load failed', e);
-        if (active) setReportSegments([]);
-      }
-    })();
-    return () => {
-      active = false;
-    };
-  }, [state.tab, state.reportPeriod, state.custFrom, state.custTo, userEmail, dataLoaded]);
-
   async function logout() {
     if (supabase) await supabase.auth.signOut();
   }
@@ -396,8 +345,6 @@ export default function App() {
     }
   }, [run]);
 
-  const proj = (pid: string) => state.projects.find((p) => p.id === pid);
-
   // ---------- actions ----------
   function addProject() {
     setState((s) => {
@@ -437,28 +384,6 @@ export default function App() {
         pausedPid: s.pausedPid === pid ? null : s.pausedPid,
       };
     });
-  }
-
-  function openSheet(segId: string) {
-    const seg = state.segments.find((g) => g.id === segId);
-    if (!seg) return;
-    setState({ sheetSegId: segId });
-  }
-  /** Edit the description (activity) of the booking shown in the detail sheet. */
-  function setSheetActivity(text: string) {
-    setState((s) => ({ segments: s.segments.map((g) => (g.id === s.sheetSegId ? { ...g, activity: text } : g)) }));
-  }
-  function closeSheet() {
-    setState({ sheetSegId: null });
-  }
-  function deleteSegment(segId: string) {
-    setState((st) => ({
-      segments: st.segments.filter((g) => g.id !== segId),
-      activeId: st.activeId === segId ? null : st.activeId,
-      paused: st.activeId === segId ? false : st.paused,
-      pausedPid: st.activeId === segId ? null : st.pausedPid,
-      sheetSegId: null,
-    }));
   }
 
   // ---------- daily tasks ----------
@@ -516,76 +441,6 @@ export default function App() {
     }));
   }
 
-  // ---------- booking detail (Reporting sheet) ----------
-  /** Update a booking's checklist and mirror it back to the linked ToDo. */
-  function applyChecklist(getId: (s: AppState) => string | null, updater: (cl: ChecklistItem[]) => ChecklistItem[]) {
-    setState((s) => {
-      const id = getId(s);
-      const seg = id ? s.segments.find((g) => g.id === id) : null;
-      if (!seg) return s;
-      const newCl = updater((seg.checklist ?? []).map((c) => ({ ...c })));
-      const segments = s.segments.map((g) => (g.id === id ? { ...g, checklist: newCl } : g));
-      const todos = seg.todoId ? s.todos.map((t) => (t.id === seg.todoId ? { ...t, checklist: newCl } : t)) : s.todos;
-      return { segments, todos };
-    });
-  }
-  const applySheetChecklist = (u: (cl: ChecklistItem[]) => ChecklistItem[]) => applyChecklist((s) => s.sheetSegId, u);
-
-  function setTime(edge: 'start' | 'end', total: number) {
-    setState((s) => ({
-      segments: s.segments.map((g) => {
-        if (g.id !== s.sheetSegId) return g;
-        if (edge === 'start') return { ...g, start: Math.max(leftBound(s.segments, g.id, g.start), Math.min(total, g.end - 5)) };
-        return { ...g, end: Math.min(rightBound(s.segments, g.id, g.end), Math.max(total, g.start + 5)) };
-      }),
-    }));
-  }
-
-  function startDrag(segId: string, edge: 'start' | 'end', e: React.PointerEvent) {
-    e.preventDefault();
-    e.stopPropagation();
-    const startY = e.clientY;
-    const seg0 = state.segments.find((g) => g.id === segId);
-    if (!seg0) return;
-    const orig = edge === 'start' ? seg0.start : seg0.end;
-    // freeze the neighbour limits at drag start so a booking can't cross into the adjacent one
-    const lower = edge === 'start' ? leftBound(state.segments, segId, seg0.start) : 0;
-    const upper = edge === 'end' ? rightBound(state.segments, segId, seg0.end) : 24 * 60;
-    dragMoved.current = false;
-    const move = (ev: PointerEvent) => {
-      dragMoved.current = true;
-      const delta = Math.round((ev.clientY - startY) / PPM / 5) * 5;
-      setStateRaw((st) => ({
-        ...st,
-        segments: st.segments.map((g) => {
-          if (g.id !== segId) return g;
-          if (edge === 'start') return { ...g, start: Math.max(lower, Math.min(orig + delta, g.end - 5)) };
-          return { ...g, end: Math.min(upper, Math.max(orig + delta, g.start + 5)) };
-        }),
-      }));
-    };
-    const up = () => {
-      window.removeEventListener('pointermove', move);
-      window.removeEventListener('pointerup', up);
-    };
-    window.addEventListener('pointermove', move);
-    window.addEventListener('pointerup', up);
-  }
-
-  function openGapFill(start: number, end: number) {
-    setState({ fillGap: { start, end } });
-  }
-  function fillGapWith(pid: string) {
-    setState((s) => {
-      if (!s.fillGap) return s;
-      const id = 'g' + Date.now();
-      return {
-        segments: s.segments.concat([{ id, pid, start: s.fillGap.start, end: s.fillGap.end, activity: '' }]),
-        fillGap: null,
-      };
-    });
-  }
-
   // ---------- derived ----------
   const s = state;
   const isReport = s.tab === 'report';
@@ -600,9 +455,6 @@ export default function App() {
   s.projects.forEach((p) => {
     totals[p.id] = s.segments.filter((g) => g.pid === p.id).reduce((a, g) => a + (g.end - g.start), 0);
   });
-
-  const sheetSeg = s.sheetSegId ? s.segments.find((g) => g.id === s.sheetSegId) : null;
-  const sheetProj = sheetSeg ? proj(sheetSeg.pid) : null;
 
   // The task whose focus countdown is currently running (if any).
   const runTodo = run ? s.todos.find((t) => t.id === run.todoId && !t.archived) ?? null : null;
@@ -683,16 +535,9 @@ export default function App() {
           {isReport && (
             <ReportView
               state={s}
-              vNow={vNow}
-              today={today}
-              clockText={clockText}
-              reportSegments={reportSegments}
+              period={s.reportPeriod}
               onSetPeriod={(p) => setState({ reportPeriod: p })}
-              onSetCust={(field, v) => setState({ [field]: v } as Partial<AppState>)}
-              onOpenSheet={openSheet}
-              onOpenGapFill={openGapFill}
-              onStartDrag={startDrag}
-              dragMoved={dragMoved}
+              today={today}
             />
           )}
 
@@ -754,34 +599,6 @@ export default function App() {
         {/* Bottom nav */}
         <BottomNav tab={s.tab} onSelect={(t) => setState({ tab: t })} />
 
-        {/* Activity sheet */}
-        {sheetSeg && sheetProj && (
-          <ActivitySheet
-            seg={sheetSeg}
-            project={sheetProj}
-            onSetStart={(m) => setTime('start', m)}
-            onSetEnd={(m) => setTime('end', m)}
-            onSetActivity={setSheetActivity}
-            onChecklistText={(i, t) => applySheetChecklist((cl) => { if (cl[i]) cl[i] = { ...cl[i], text: t }; return cl; })}
-            onChecklistToggle={(i) => applySheetChecklist((cl) => { if (cl[i]) cl[i] = { ...cl[i], done: !cl[i].done }; return cl; })}
-            onChecklistAdd={() => applySheetChecklist((cl) => cl.concat([{ text: '', done: false }]))}
-            onChecklistMove={(i, dir) => applySheetChecklist((cl) => moveItem(cl, i, dir))}
-            onClose={closeSheet}
-            onDelete={() => deleteSegment(sheetSeg.id)}
-            key={sheetSeg.id}
-          />
-        )}
-
-        {/* Gap-fill picker */}
-        {s.fillGap && (
-          <GapFillSheet
-            gap={s.fillGap}
-            projects={s.projects}
-            onPick={fillGapWith}
-            onCancel={() => setState({ fillGap: null })}
-          />
-        )}
-
         {/* Daily-Task editor */}
         {todoSheet && (
           <TodoSheet
@@ -837,154 +654,127 @@ function ConfirmDialog(props: { message: string; confirmLabel: string; onConfirm
   );
 }
 
-/* ===== shared detail form (Start/Zeit, Beschreibung, Aufgaben) ===== */
-/** The editable body of a booking detail: start + a second time field, the
- *  description and the subtask checklist. Used by the Reporting booking sheet
- *  (ActivitySheet) when editing a past booking. */
-function BookingDetailFields(props: {
-  seg: Segment;
-  textColor: string;
-  mutedColor: string;
-  secondTimeLabel: string;
-  secondTimeValue: number | null;
-  secondTimeNullable: boolean;
-  onSetStart: (min: number) => void;
-  onSetSecondTime: (min: number | null) => void;
-  onSetActivity: (text: string) => void;
-  onChecklistText: (i: number, text: string) => void;
-  onChecklistToggle: (i: number) => void;
-  onChecklistAdd: () => void;
-  onChecklistMove: (i: number, dir: -1 | 1) => void;
-}) {
-  const {
-    seg, textColor, mutedColor, secondTimeLabel, secondTimeValue, secondTimeNullable,
-    onSetStart, onSetSecondTime, onSetActivity,
-    onChecklistText, onChecklistToggle, onChecklistAdd, onChecklistMove,
-  } = props;
-  const timeInput: CSSProperties = { border: 'none', padding: '5px 8px', fontSize: 13, color: C.dk1, background: C.lt1, fontVariantNumeric: 'tabular-nums' };
-  const sectionLabel: CSSProperties = { fontSize: 11, letterSpacing: '.1em', textTransform: 'uppercase', color: mutedColor, fontWeight: 700, margin: '14px 0 8px' };
-  return (
-    <>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span style={{ fontSize: 12, color: mutedColor }}>Start</span>
-          <input
-            type="time"
-            value={fmtClock(seg.start)}
-            onChange={(e) => {
-              const v = e.target.value;
-              if (!v) return;
-              const [h, m] = v.split(':').map(Number);
-              onSetStart(h * 60 + m);
-            }}
-            style={timeInput}
-          />
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span style={{ fontSize: 12, color: mutedColor }}>{secondTimeLabel}</span>
-          <input
-            type="time"
-            value={secondTimeValue != null ? fmtClock(secondTimeValue) : ''}
-            onChange={(e) => {
-              const v = e.target.value;
-              if (!v) return secondTimeNullable ? onSetSecondTime(null) : undefined;
-              const [h, m] = v.split(':').map(Number);
-              onSetSecondTime(h * 60 + m);
-            }}
-            style={timeInput}
-          />
-        </div>
-      </div>
+/* ======================= REPORTING ======================= */
+/** Fixed colours for the three task categories in the Reporting charts. */
+const CATEGORY_COLORS: Record<TodoCategory, string> = {
+  projekt: '#2B5FAE',
+  akquise: '#E8772E',
+  intern: '#7B3FB8',
+};
 
-      <div style={sectionLabel}>Beschreibung</div>
-      <textarea
-        value={seg.activity}
-        onChange={(e) => onSetActivity(e.target.value)}
-        placeholder="Was wird gemacht? …"
-        rows={2}
-        style={{ width: '100%', resize: 'vertical', border: 'none', padding: '8px 10px', fontSize: 14, lineHeight: 1.4, color: C.dk1, background: C.lt1, outline: 'none', fontFamily: 'inherit' }}
-      />
-
-      <div style={sectionLabel}>Aufgaben</div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-        {(seg.checklist ?? []).map((it, i, arr) => (
-          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <input
-              type="checkbox"
-              checked={it.done}
-              onChange={() => onChecklistToggle(i)}
-              style={{ width: 18, height: 18, flex: '0 0 auto' }}
-            />
-            <input
-              type="text"
-              value={it.text}
-              onChange={(e) => onChecklistText(i, e.target.value)}
-              placeholder="Subaktivität …"
-              style={{ flex: '1 1 auto', minWidth: 0, border: 'none', padding: '7px 9px', fontSize: 14, color: C.dk1, background: C.lt1, textDecoration: it.done ? 'line-through' : 'none' }}
-            />
-            <button type="button" onClick={() => onChecklistMove(i, -1)} disabled={i === 0} style={moveBtnStyle(textColor, 'rgba(255,255,255,.18)', i === 0)}>
-              ▲
-            </button>
-            <button type="button" onClick={() => onChecklistMove(i, 1)} disabled={i === arr.length - 1} style={moveBtnStyle(textColor, 'rgba(255,255,255,.18)', i === arr.length - 1)}>
-              ▼
-            </button>
-          </div>
-        ))}
-      </div>
-      <button
-        type="button"
-        onClick={onChecklistAdd}
-        style={{ marginTop: 8, padding: '6px 12px', background: 'rgba(255,255,255,.18)', color: textColor, fontSize: 13, fontWeight: 700 }}
-      >
-        + Aufgabe
-      </button>
-    </>
-  );
+/** YYYY-MM-DD → local Date at midnight (avoids UTC off-by-one). */
+function parseDay(s: string): Date {
+  const [y, m, d] = s.split('-').map(Number);
+  return new Date(y, (m || 1) - 1, d || 1);
+}
+function dayKey(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${dd}`;
+}
+function addDays(d: Date, n: number): Date {
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate() + n);
+}
+/** Monday (local) of the week containing d. */
+function mondayOf(d: Date): Date {
+  const wd = (d.getDay() + 6) % 7; // 0 = Monday
+  return addDays(d, -wd);
 }
 
-/* ======================= REPORTING ======================= */
+interface ReportBucket {
+  key: string;
+  label: string;
+  hours: number;
+  count: number;
+}
+
+/** Group completed tasks into chart buckets: days (Woche), weeks (Monat) or
+ *  months (Jahr). Empty buckets are kept so the time axis stays continuous. */
+function reportBuckets(tasks: Todo[], period: ReportPeriod, from: string, to: string): ReportBucket[] {
+  const buckets: ReportBucket[] = [];
+  const idx = new Map<string, number>();
+  const fromD = parseDay(from);
+  const toD = parseDay(to);
+
+  if (period === 'jahr') {
+    const year = fromD.getFullYear();
+    const M = ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dez'];
+    for (let m = 0; m < 12; m++) idx.set(`${year}-${String(m + 1).padStart(2, '0')}`, buckets.push({ key: '', label: M[m], hours: 0, count: 0 }) - 1);
+    for (const t of tasks) {
+      const i = idx.get((t.completedAt ?? '').slice(0, 7));
+      if (i != null) { buckets[i].hours += (t.actualMin ?? 0) / 60; buckets[i].count += 1; }
+    }
+  } else if (period === 'monat') {
+    for (let d = mondayOf(fromD); d <= toD; d = addDays(d, 7)) {
+      const key = dayKey(d);
+      idx.set(key, buckets.push({ key, label: d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' }), hours: 0, count: 0 }) - 1);
+    }
+    for (const t of tasks) {
+      const i = idx.get(dayKey(mondayOf(parseDay(t.completedAt!))));
+      if (i != null) { buckets[i].hours += (t.actualMin ?? 0) / 60; buckets[i].count += 1; }
+    }
+  } else {
+    // Woche (and any other range): one bucket per day
+    for (let d = fromD; d <= toD; d = addDays(d, 1)) {
+      const key = dayKey(d);
+      idx.set(key, buckets.push({ key, label: d.toLocaleDateString('de-DE', { weekday: 'short' }), hours: 0, count: 0 }) - 1);
+    }
+    for (const t of tasks) {
+      const i = idx.get(t.completedAt!);
+      if (i != null) { buckets[i].hours += (t.actualMin ?? 0) / 60; buckets[i].count += 1; }
+    }
+  }
+  return buckets;
+}
+
 function ReportView(props: {
   state: AppState;
-  vNow: number;
-  today: Date;
-  clockText: string;
-  reportSegments: DaySegment[];
+  period: ReportPeriod;
   onSetPeriod: (p: ReportPeriod) => void;
-  onSetCust: (field: 'custFrom' | 'custTo', v: string) => void;
-  onOpenSheet: (segId: string) => void;
-  onOpenGapFill: (start: number, end: number) => void;
-  onStartDrag: (segId: string, edge: 'start' | 'end', e: React.PointerEvent) => void;
-  dragMoved: React.MutableRefObject<boolean>;
+  today: Date;
 }) {
-  const { state: s, vNow, today, clockText, reportSegments, onSetPeriod, onSetCust, onOpenSheet, onOpenGapFill, onStartDrag, dragMoved } = props;
-  const period = s.reportPeriod;
-  const showTimeline = period === 'heute';
-  const showCust = period === 'zeitraum';
+  const { state: s, period, onSetPeriod, today } = props;
+  const { from, to } = periodRange(period, s.custFrom, s.custTo, today);
 
-  // Merge today's live bookings (state.segments) over the fetched range so
-  // unsaved edits show up immediately; out-of-range days are dropped by aggregate.
-  const todayKey = localISODate();
-  const daySegments: DaySegment[] = [
-    ...reportSegments.filter((seg) => seg.day !== todayKey),
-    ...s.segments.map((seg) => ({ ...seg, day: todayKey })),
-  ];
+  // completed tasks in the selected slice (legacy ones without a date are ignored
+  // here – the Archive still lists them)
+  const done = s.todos.filter((t) => t.archived && t.completedAt && t.completedAt >= from && t.completedAt <= to);
+  const timed = done.filter((t) => t.actualMin != null);
+
+  const totalPlanned = timed.reduce((a, t) => a + t.plannedMin, 0);
+  const totalActual = timed.reduce((a, t) => a + (t.actualMin ?? 0), 0);
+  const deviation = totalPlanned > 0 ? Math.round(((totalActual - totalPlanned) / totalPlanned) * 100) : 0;
+  // per-task estimate quality (±10 % counts as "im Plan")
+  let onPlan = 0, over = 0, under = 0;
+  for (const t of timed) {
+    const d = (t.actualMin ?? 0) - t.plannedMin;
+    const tol = Math.max(2, t.plannedMin * 0.1);
+    if (d > tol) over++;
+    else if (d < -tol) under++;
+    else onPlan++;
+  }
+
+  // Ist-time per category
+  const catRows = (Object.keys(CATEGORY_LABELS) as TodoCategory[]).map((c) => ({
+    cat: c,
+    min: timed.filter((t) => t.category === c).reduce((a, t) => a + (t.actualMin ?? 0), 0),
+  }));
+  const catTotal = catRows.reduce((a, r) => a + r.min, 0);
+
+  const buckets = reportBuckets(done, period, from, to);
+  const maxHours = Math.max(0.001, ...buckets.map((b) => b.hours));
+  const avgMin = timed.length > 0 ? Math.round(totalActual / timed.length) : 0;
 
   const periodDefs: [ReportPeriod, string][] = [
-    ['heute', 'Heute'],
     ['woche', 'Woche'],
     ['monat', 'Monat'],
     ['jahr', 'Jahr'],
-    ['zeitraum', 'Zeitraum'],
   ];
 
-  const rep = showTimeline
-    ? buildReport({ projects: s.projects, segments: s.segments, activeId: s.activeId, vNow, date: today })
-    : null;
-  const agg = !showTimeline
-    ? aggregate({ projects: s.projects, period, custFrom: s.custFrom, custTo: s.custTo, today, daySegments })
-    : null;
-
-  const hatch = 'repeating-linear-gradient(135deg,#F3F4F4,#F3F4F4 7px,#E8ECEE 7px,#E8ECEE 14px)';
+  const sectionLabel = (txt: string) => (
+    <div style={{ fontSize: 11, letterSpacing: '.12em', textTransform: 'uppercase', color: C.greyFooter, fontWeight: 700, marginBottom: 12, marginTop: 28 }}>{txt}</div>
+  );
 
   return (
     <section style={{ padding: '18px 20px 36px' }}>
@@ -994,316 +784,95 @@ function ReportView(props: {
             key={k}
             type="button"
             onClick={() => onSetPeriod(k)}
-            style={{
-              flex: '1 1 auto',
-              padding: '9px 4px',
-              fontSize: 12,
-              fontWeight: 700,
-              letterSpacing: '.02em',
-              textAlign: 'center',
-              whiteSpace: 'nowrap',
-              color: period === k ? C.lt1 : '#5E7184',
-              background: period === k ? C.accent1 : 'transparent',
-            }}
+            style={{ flex: '1 1 auto', padding: '9px 4px', fontSize: 12, fontWeight: 700, textAlign: 'center', color: period === k ? C.lt1 : '#5E7184', background: period === k ? C.accent1 : 'transparent' }}
           >
             {label}
           </button>
         ))}
       </div>
 
-      {/* ---- Tagesansicht (timeline) ---- */}
-      {rep && (
+      {done.length === 0 ? (
+        <div style={{ fontSize: 13, color: C.muted, padding: '8px 0' }}>Keine erledigten Aufgaben in diesem Zeitraum.</div>
+      ) : (
         <>
-          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 14 }}>
+          {/* ---- Prognose-Genauigkeit (Plan vs. Ist) ---- */}
+          <div style={{ fontSize: 11, letterSpacing: '.14em', textTransform: 'uppercase', color: C.greyFooter, fontWeight: 700 }}>Prognose</div>
+          <div style={{ display: 'flex', gap: 10, marginTop: 12 }}>
+            <div style={{ flex: 1, border: '1px solid #E1E5E8', background: C.lt1, padding: '12px 10px', textAlign: 'center' }}>
+              <div style={{ fontSize: 22, fontWeight: 300, color: C.greyFooter, fontVariantNumeric: 'tabular-nums', lineHeight: 1 }}>{fmtDur(totalPlanned)}</div>
+              <div style={{ fontSize: 10, letterSpacing: '.08em', textTransform: 'uppercase', color: C.greyFooter, marginTop: 5 }}>geplant</div>
+            </div>
+            <div style={{ flex: 1, border: '1px solid #E1E5E8', background: C.lt1, padding: '12px 10px', textAlign: 'center' }}>
+              <div style={{ fontSize: 22, fontWeight: 300, color: C.dk1, fontVariantNumeric: 'tabular-nums', lineHeight: 1 }}>{fmtDur(totalActual)}</div>
+              <div style={{ fontSize: 10, letterSpacing: '.08em', textTransform: 'uppercase', color: C.greyFooter, marginTop: 5 }}>benötigt</div>
+            </div>
+            <div style={{ flex: 1, border: '1px solid #E1E5E8', background: C.lt1, padding: '12px 10px', textAlign: 'center' }}>
+              <div style={{ fontSize: 22, fontWeight: 300, color: deviation > 0 ? C.critical : '#2E8B3D', fontVariantNumeric: 'tabular-nums', lineHeight: 1 }}>
+                {deviation > 0 ? '+' : ''}{deviation}%
+              </div>
+              <div style={{ fontSize: 10, letterSpacing: '.08em', textTransform: 'uppercase', color: C.greyFooter, marginTop: 5 }}>Abweichung</div>
+            </div>
+          </div>
+          {timed.length > 0 ? (
+            <div style={{ fontSize: 12, color: C.greyFooter, marginTop: 10 }}>
+              <span style={{ color: '#2E8B3D', fontWeight: 700 }}>{onPlan}</span> im Plan ·{' '}
+              <span style={{ color: C.critical, fontWeight: 700 }}>{over}</span> überzogen ·{' '}
+              <span style={{ color: C.accent1, fontWeight: 700 }}>{under}</span> schneller
+              <span style={{ color: C.muted }}> &nbsp;(von {timed.length} mit Zeitmessung)</span>
+            </div>
+          ) : (
+            <div style={{ fontSize: 12, color: C.muted, marginTop: 10 }}>Noch keine Aufgabe mit Zeitmessung in diesem Zeitraum.</div>
+          )}
+
+          {/* ---- Durchsatz ---- */}
+          {sectionLabel('Durchsatz')}
+          <div style={{ display: 'flex', gap: 18, marginBottom: 14 }}>
             <div>
-              <div style={{ fontSize: 11, letterSpacing: '.14em', textTransform: 'uppercase', color: C.greyFooter, fontWeight: 700, whiteSpace: 'nowrap' }}>
-                Chronologisch · Heute
-              </div>
-              <div style={{ fontSize: 13, color: C.greyFooter, marginTop: 3 }}>{rep.reportDate}</div>
+              <div style={{ fontSize: 24, fontWeight: 300, color: C.accent1, fontVariantNumeric: 'tabular-nums', lineHeight: 1 }}>{done.length}</div>
+              <div style={{ fontSize: 10, letterSpacing: '.08em', textTransform: 'uppercase', color: C.greyFooter, marginTop: 4 }}>erledigt</div>
             </div>
-            <div style={{ textAlign: 'right', flex: '0 0 auto' }}>
-              <div style={{ fontSize: 28, fontWeight: 300, color: C.accent1, fontVariantNumeric: 'tabular-nums', lineHeight: 1 }}>
-                {rep.reportTotal}
-              </div>
-              <div style={{ fontSize: 10, letterSpacing: '.1em', textTransform: 'uppercase', color: C.greyFooter }}>Std erfasst</div>
+            <div>
+              <div style={{ fontSize: 24, fontWeight: 300, color: C.accent1, fontVariantNumeric: 'tabular-nums', lineHeight: 1 }}>{fmtDur(totalActual)}</div>
+              <div style={{ fontSize: 10, letterSpacing: '.08em', textTransform: 'uppercase', color: C.greyFooter, marginTop: 4 }}>Std gesamt</div>
+            </div>
+            <div>
+              <div style={{ fontSize: 24, fontWeight: 300, color: C.accent1, fontVariantNumeric: 'tabular-nums', lineHeight: 1 }}>{fmtDur(avgMin)}</div>
+              <div style={{ fontSize: 10, letterSpacing: '.08em', textTransform: 'uppercase', color: C.greyFooter, marginTop: 4 }}>Ø / Aufgabe</div>
             </div>
           </div>
-
-          <div style={{ display: 'flex', height: 10, margin: '16px 0 12px', background: C.lt2, overflow: 'hidden' }}>
-            {rep.shareSegments.map((sh) => (
-              <div key={sh.pid} style={{ width: sh.widthPct + '%', background: sh.color }} />
-            ))}
-          </div>
-
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px 16px', marginBottom: 20 }}>
-            {rep.legend.map((lg) => (
-              <div key={lg.pid} style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-                <span style={{ width: 10, height: 10, background: lg.color, flex: '0 0 auto' }} />
-                <span style={{ fontSize: 12, color: C.dk1, fontWeight: 500 }}>{lg.name}</span>
-                <span style={{ fontSize: 12, color: C.greyFooter, fontVariantNumeric: 'tabular-nums' }}>{lg.dur}</span>
+          <div style={{ display: 'flex', alignItems: 'flex-end', gap: 5, height: 130, paddingBottom: 2, borderBottom: '1px solid #EDF0F1' }}>
+            {buckets.map((b, i) => (
+              <div key={i} style={{ flex: '1 1 0', minWidth: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
+                <div style={{ width: '62%', minWidth: 7, maxWidth: 30, height: Math.round((b.hours / maxHours) * 110), background: b.hours > 0 ? C.accent1 : '#EDF0F1' }} title={`${fmtDur(Math.round(b.hours * 60))} h`} />
+                <div style={{ fontSize: 9, color: C.muted, whiteSpace: 'nowrap' }}>{b.label}</div>
               </div>
             ))}
           </div>
 
-          <div style={{ fontSize: 11, lineHeight: 1.5, color: C.muted, marginBottom: 12 }}>
-            Ziehe die Ränder einer Buchung, um Start &amp; Ende anzupassen · tippe eine Lücke, um sie zu füllen · tippe eine Buchung, um die
-            Tätigkeit zu bearbeiten
-          </div>
-
-          <div style={{ position: 'relative', height: rep.timelineHeight }}>
-            {rep.hourMarks.map((hm) => (
-              <div key={hm.hour}>
-                <div style={{ position: 'absolute', left: 48, right: 0, top: hm.top, borderTop: '1px solid #EDF0F1' }} />
-                <div
-                  style={{
-                    position: 'absolute',
-                    left: 0,
-                    top: hm.top - 7,
-                    width: 42,
-                    textAlign: 'right',
-                    fontSize: 11,
-                    color: C.muted,
-                    fontVariantNumeric: 'tabular-nums',
-                  }}
-                >
-                  {hm.label}
-                </div>
-              </div>
-            ))}
-            <div style={{ position: 'absolute', top: 0, bottom: 0, left: 48, right: 2 }}>
-              {rep.gaps.map((g) => (
-                <button
-                  key={g.start + '-' + g.end}
-                  type="button"
-                  onClick={() => onOpenGapFill(g.start, g.end)}
-                  style={{
-                    position: 'absolute',
-                    top: g.top,
-                    height: g.height - 2,
-                    left: 0,
-                    right: 0,
-                    background: hatch,
-                    border: '1px dashed #B9C4CB',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    color: C.accent2,
-                  }}
-                >
-                  <span style={{ fontSize: 11, color: C.accent2, fontWeight: 700 }}>+ Lücke füllen · {g.label}</span>
-                </button>
-              ))}
-              {rep.blocks.map((b) => {
-                const grip: CSSProperties = { width: 32, height: 4, borderRadius: 2, background: b.textColor, opacity: 0.8, pointerEvents: 'none' };
-                const handleBase: CSSProperties = {
-                  position: 'absolute',
-                  left: 0,
-                  right: 0,
-                  height: 16,
-                  display: b.showHandles ? 'flex' : 'none',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  cursor: 'ns-resize',
-                  touchAction: 'none',
-                  zIndex: 2,
-                };
+          {/* ---- Kategorie-Verteilung ---- */}
+          {sectionLabel('Nach Kategorie')}
+          {catTotal === 0 ? (
+            <div style={{ fontSize: 13, color: C.muted, padding: '4px 0' }}>Keine gemessene Zeit in diesem Zeitraum.</div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+              {catRows.map((r) => {
+                const pct = catTotal > 0 ? Math.round((r.min / catTotal) * 100) : 0;
                 return (
-                  <div
-                    key={b.id}
-                    onClick={() => {
-                      if (dragMoved.current) {
-                        dragMoved.current = false;
-                        return;
-                      }
-                      onOpenSheet(b.id);
-                    }}
-                    style={{
-                      position: 'absolute',
-                      top: b.top,
-                      height: b.height - 2,
-                      left: 'calc(' + b.leftPct + '% + 2px)',
-                      width: 'calc(' + b.widthPct + '% - 4px)',
-                      background: b.color,
-                      color: b.textColor,
-                      padding: b.tightPad ? '3px 9px' : '8px 9px',
-                      overflow: 'hidden',
-                      cursor: 'pointer',
-                      outline: b.isRun ? '2px solid #FEFFFF' : undefined,
-                      outlineOffset: b.isRun ? -3 : undefined,
-                    }}
-                  >
-                    <span onPointerDown={(e) => onStartDrag(b.id, 'start', e)} style={{ ...handleBase, top: -2 }}>
-                      <span style={grip} />
-                    </span>
-                    {b.showCode && (
-                      <span
-                        style={{
-                          display: 'block',
-                          fontSize: 11,
-                          fontWeight: 700,
-                          letterSpacing: '.06em',
-                          color: b.textColor,
-                          opacity: 0.85,
-                          whiteSpace: 'nowrap',
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                        }}
-                      >
-                        {b.code}
-                      </span>
-                    )}
-                    {b.showRange && (
-                      <span
-                        style={{
-                          display: 'block',
-                          fontSize: 12,
-                          fontWeight: 500,
-                          color: b.textColor,
-                          fontVariantNumeric: 'tabular-nums',
-                          marginTop: 2,
-                          whiteSpace: 'nowrap',
-                        }}
-                      >
-                        {b.rangeText}
-                      </span>
-                    )}
-                    {b.showAct && (
-                      <span
-                        style={{
-                          display: '-webkit-box',
-                          WebkitLineClamp: 2,
-                          WebkitBoxOrient: 'vertical',
-                          overflow: 'hidden',
-                          fontSize: 11,
-                          lineHeight: 1.32,
-                          fontWeight: 400,
-                          color: b.textColor,
-                          opacity: 0.82,
-                          marginTop: 4,
-                        }}
-                      >
-                        {b.activity}
-                      </span>
-                    )}
-                    <span onPointerDown={(e) => onStartDrag(b.id, 'end', e)} style={{ ...handleBase, bottom: -2 }}>
-                      <span style={grip} />
-                    </span>
+                  <div key={r.cat}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                      <span style={{ width: 10, height: 10, flex: '0 0 auto', background: CATEGORY_COLORS[r.cat] }} />
+                      <span style={{ fontSize: 14, fontWeight: 700, color: C.dk1 }}>{CATEGORY_LABELS[r.cat]}</span>
+                      <span style={{ marginLeft: 'auto', fontSize: 13, fontWeight: 700, color: C.dk1, fontVariantNumeric: 'tabular-nums' }}>{fmtDur(r.min)}</span>
+                      <span style={{ fontSize: 12, color: C.muted, width: 38, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{pct}%</span>
+                    </div>
+                    <div style={{ flex: '1 1 auto', height: 8, background: '#F0F2F3', position: 'relative' }}>
+                      <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: pct + '%', background: CATEGORY_COLORS[r.cat] }} />
+                    </div>
                   </div>
                 );
               })}
             </div>
-            <div style={{ position: 'absolute', left: 48, right: 0, top: rep.nowTop, borderTop: '2px dashed #0E1721', pointerEvents: 'none' }} />
-            <div
-              style={{
-                position: 'absolute',
-                right: 0,
-                top: rep.nowTop + 4,
-                fontSize: 10,
-                fontWeight: 700,
-                letterSpacing: '.06em',
-                textTransform: 'uppercase',
-                color: C.dk1,
-                pointerEvents: 'none',
-              }}
-            >
-              jetzt {clockText}
-            </div>
-          </div>
-        </>
-      )}
-
-      {/* ---- aggregierte Auswertung ---- */}
-      {agg && (
-        <>
-          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 14 }}>
-            <div>
-              <div style={{ fontSize: 11, letterSpacing: '.14em', textTransform: 'uppercase', color: C.greyFooter, fontWeight: 700, whiteSpace: 'nowrap' }}>
-                Auswertung
-              </div>
-              <div style={{ fontSize: 13, color: C.greyFooter, marginTop: 3 }}>{agg.rangeLabel}</div>
-            </div>
-            <div style={{ textAlign: 'right', flex: '0 0 auto' }}>
-              <div style={{ fontSize: 28, fontWeight: 300, color: C.accent1, fontVariantNumeric: 'tabular-nums', lineHeight: 1 }}>
-                {agg.totalText}
-              </div>
-              <div style={{ fontSize: 10, letterSpacing: '.1em', textTransform: 'uppercase', color: C.greyFooter }}>Std gesamt</div>
-            </div>
-          </div>
-
-          {showCust && (
-            <div style={{ display: 'flex', gap: 10, marginTop: 14 }}>
-              <div style={{ flex: 1 }}>
-                <label style={{ display: 'block', fontSize: 10, letterSpacing: '.08em', textTransform: 'uppercase', color: C.greyFooter, fontWeight: 700, marginBottom: 5 }}>
-                  Von
-                </label>
-                <input
-                  type="date"
-                  value={s.custFrom}
-                  onChange={(e) => onSetCust('custFrom', e.target.value)}
-                  style={{ width: '100%', border: '1px solid #D5DBDF', padding: '9px 11px', fontSize: 13, color: C.dk1, outline: 'none', background: C.lt2 }}
-                />
-              </div>
-              <div style={{ flex: 1 }}>
-                <label style={{ display: 'block', fontSize: 10, letterSpacing: '.08em', textTransform: 'uppercase', color: C.greyFooter, fontWeight: 700, marginBottom: 5 }}>
-                  Bis
-                </label>
-                <input
-                  type="date"
-                  value={s.custTo}
-                  onChange={(e) => onSetCust('custTo', e.target.value)}
-                  style={{ width: '100%', border: '1px solid #D5DBDF', padding: '9px 11px', fontSize: 13, color: C.dk1, outline: 'none', background: C.lt2 }}
-                />
-              </div>
-            </div>
           )}
-
-          <div style={{ display: 'flex', height: 10, margin: '16px 0 22px', background: C.lt2, overflow: 'hidden' }}>
-            {agg.shareSegments.map((sh) => (
-              <div key={sh.pid} style={{ width: sh.widthPct + '%', background: sh.color }} />
-            ))}
-          </div>
-
-          <div style={{ fontSize: 11, letterSpacing: '.12em', textTransform: 'uppercase', color: C.greyFooter, fontWeight: 700, marginBottom: 12 }}>
-            Verlauf
-          </div>
-          <div style={{ display: 'flex', alignItems: 'flex-end', gap: 5, height: 140, paddingBottom: 2, marginBottom: 24, borderBottom: '1px solid #EDF0F1' }}>
-            {agg.columnBuckets.map((cb, i) => (
-              <div key={i} style={{ flex: '1 1 0', minWidth: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
-                <div style={{ width: '62%', minWidth: 7, maxWidth: 30, height: cb.colHeight, display: 'flex', flexDirection: 'column', justifyContent: 'flex-end' }}>
-                  {cb.segments.map((sg, j) => (
-                    <div key={j} style={{ width: '100%', height: sg.heightPx, background: sg.color }} />
-                  ))}
-                </div>
-                <div style={{ fontSize: 9, color: C.muted, whiteSpace: 'nowrap' }}>{cb.label}</div>
-              </div>
-            ))}
-          </div>
-
-          <div style={{ fontSize: 11, letterSpacing: '.12em', textTransform: 'uppercase', color: C.greyFooter, fontWeight: 700, marginBottom: 14 }}>
-            Nach Projekt
-          </div>
-          {agg.rankedBars.length === 0 && (
-            <div style={{ fontSize: 13, color: C.muted, padding: '6px 0 4px' }}>
-              Keine Buchungen in diesem Zeitraum.
-            </div>
-          )}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-            {agg.rankedBars.map((rb) => (
-              <div key={rb.pid}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-                  <span style={{ width: 10, height: 10, flex: '0 0 auto', background: rb.color }} />
-                  <span style={{ fontSize: 14, fontWeight: 700, color: C.dk1 }}>{rb.name}</span>
-                  <span style={{ marginLeft: 'auto', fontSize: 13, fontWeight: 700, color: C.dk1, fontVariantNumeric: 'tabular-nums' }}>
-                    {rb.durText}
-                  </span>
-                  <span style={{ fontSize: 12, color: C.muted, width: 38, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{rb.pctText}</span>
-                </div>
-                <div style={{ flex: '1 1 auto', height: 8, background: '#F0F2F3', position: 'relative' }}>
-                  <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: rb.fillPct + '%', background: rb.color }} />
-                </div>
-              </div>
-            ))}
-          </div>
         </>
       )}
     </section>
@@ -1510,156 +1079,6 @@ function BottomNav({ tab, onSelect }: { tab: Tab; onSelect: (t: Tab) => void }) 
         );
       })}
     </nav>
-  );
-}
-
-/* ======================= ACTIVITY SHEET ======================= */
-function ActivitySheet(props: {
-  seg: Segment;
-  project: Project;
-  onSetStart: (min: number) => void;
-  onSetEnd: (min: number) => void;
-  onSetActivity: (text: string) => void;
-  onChecklistText: (i: number, text: string) => void;
-  onChecklistToggle: (i: number) => void;
-  onChecklistAdd: () => void;
-  onChecklistMove: (i: number, dir: -1 | 1) => void;
-  onClose: () => void;
-  onDelete: () => void;
-}) {
-  const { seg, project, onSetStart, onSetEnd, onSetActivity, onChecklistText, onChecklistToggle, onChecklistAdd, onChecklistMove, onClose, onDelete } = props;
-  const [confirmDelete, setConfirmDelete] = useState(false);
-  const tc = textOn(project.color);
-  const dark = tc === C.dk1;
-  const muted = dark ? 'rgba(14,23,33,.6)' : 'rgba(255,255,255,.72)';
-  const grab = dark ? 'rgba(14,23,33,.22)' : 'rgba(255,255,255,.45)';
-  const blocked = needsActivity(seg); // can't close until a description or subtask exists
-
-  return (
-    <div
-      onClick={() => { if (!blocked) onClose(); }}
-      style={{ position: 'absolute', inset: 0, background: 'rgba(14,23,33,.4)', zIndex: 30, display: 'flex', alignItems: 'flex-end', animation: 'tkFade .18s ease' }}
-    >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        style={{ width: '100%', maxHeight: '92dvh', overflowY: 'auto', background: project.color, padding: '14px 20px 22px', animation: 'tkRise .26s cubic-bezier(.16,.84,.44,1)', boxShadow: '0 -8px 30px rgba(14,23,33,.2)' }}
-      >
-        <div style={{ width: 38, height: 4, background: grab, margin: '0 auto 14px' }} />
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 14 }}>
-          <div style={{ minWidth: 0 }}>
-            <div style={{ fontSize: 11, letterSpacing: '.14em', textTransform: 'uppercase', fontWeight: 700, color: muted }}>Beendet</div>
-            <div style={{ fontSize: 19, fontWeight: 700, color: tc, marginTop: 4, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-              {project.code + '  ·  ' + project.name}
-            </div>
-          </div>
-          <div style={{ textAlign: 'right', flex: '0 0 auto' }}>
-            <div style={{ fontSize: 34, fontWeight: 300, color: tc, fontVariantNumeric: 'tabular-nums', lineHeight: 1 }}>{fmtDur(seg.end - seg.start)}</div>
-            <div style={{ fontSize: 10, letterSpacing: '.12em', textTransform: 'uppercase', color: muted }}>Std : Min</div>
-          </div>
-        </div>
-
-        <div style={{ marginTop: 14, borderTop: '1px solid rgba(255,255,255,.25)', paddingTop: 12 }}>
-          <BookingDetailFields
-            seg={seg}
-            textColor={tc}
-            mutedColor={muted}
-            secondTimeLabel="Ende"
-            secondTimeValue={seg.end}
-            secondTimeNullable={false}
-            onSetStart={onSetStart}
-            onSetSecondTime={(m) => { if (m != null) onSetEnd(m); }}
-            onSetActivity={onSetActivity}
-            onChecklistText={onChecklistText}
-            onChecklistToggle={onChecklistToggle}
-            onChecklistAdd={onChecklistAdd}
-            onChecklistMove={onChecklistMove}
-          />
-
-          {blocked && (
-            <div style={{ fontSize: 12, color: muted, marginTop: 14 }}>
-              Bitte zuerst eine Beschreibung oder eine Aufgabe erfassen, um die Buchung abzuschließen.
-            </div>
-          )}
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={blocked}
-            style={{ width: '100%', marginTop: blocked ? 8 : 14, padding: 12, background: 'rgba(255,255,255,.18)', color: tc, fontSize: 14, fontWeight: 700, letterSpacing: '.04em', textTransform: 'uppercase', opacity: blocked ? 0.4 : 1, cursor: blocked ? 'not-allowed' : 'pointer' }}
-          >
-            Schließen
-          </button>
-          {confirmDelete ? (
-            <div style={{ marginTop: 10, padding: '12px 13px', background: C.lt1, border: '1px solid ' + C.critical }}>
-              <div style={{ fontSize: 13, color: C.dk1, fontWeight: 500, marginBottom: 10 }}>Diese Buchung wirklich löschen?</div>
-              <div style={{ display: 'flex', gap: 10 }}>
-                <button
-                  type="button"
-                  onClick={() => setConfirmDelete(false)}
-                  style={{ flex: 1, padding: 11, background: C.lt2, color: C.dk1, fontSize: 13, fontWeight: 700 }}
-                >
-                  Abbrechen
-                </button>
-                <button
-                  type="button"
-                  onClick={onDelete}
-                  style={{ flex: 1, padding: 11, background: C.critical, color: C.lt1, fontSize: 13, fontWeight: 700 }}
-                >
-                  Löschen
-                </button>
-              </div>
-            </div>
-          ) : (
-            <button
-              type="button"
-              onClick={() => setConfirmDelete(true)}
-              style={{ width: '100%', marginTop: 10, padding: 11, background: 'transparent', color: tc, fontSize: 13, fontWeight: 700, letterSpacing: '.04em', opacity: 0.85 }}
-            >
-              Eintrag löschen
-            </button>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/* ======================= GAP-FILL PICKER ======================= */
-function GapFillSheet(props: { gap: Gap; projects: Project[]; onPick: (pid: string) => void; onCancel: () => void }) {
-  const { gap, projects, onPick, onCancel } = props;
-  const range = fmtClock(gap.start) + '–' + fmtClock(gap.end) + ' (' + fmtDur(gap.end - gap.start) + ' h)';
-  return (
-    <div
-      onClick={onCancel}
-      style={{ position: 'absolute', inset: 0, background: 'rgba(14,23,33,.4)', zIndex: 30, display: 'flex', alignItems: 'flex-end', animation: 'tkFade .18s ease' }}
-    >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        style={{ width: '100%', background: C.lt1, padding: '22px 20px 24px', animation: 'tkRise .26s cubic-bezier(.16,.84,.44,1)', boxShadow: '0 -8px 30px rgba(14,23,33,.2)' }}
-      >
-        <div style={{ width: 38, height: 4, background: '#D5DBDF', margin: '0 auto 18px' }} />
-        <div style={{ fontSize: 11, letterSpacing: '.12em', textTransform: 'uppercase', color: C.greyFooter, fontWeight: 700 }}>Lücke &nbsp;·&nbsp; {range}</div>
-        <div style={{ fontSize: 21, fontWeight: 700, color: C.dk1, margin: '6px 0 16px' }}>Welchem Projekt zuordnen?</div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-          {projects.map((p) => {
-            const tc = textOn(p.color);
-            return (
-              <button
-                key={p.id}
-                type="button"
-                onClick={() => onPick(p.id)}
-                style={{ display: 'flex', flexDirection: 'column', gap: 2, alignItems: 'flex-start', textAlign: 'left', padding: '12px 13px', background: p.color, color: tc }}
-              >
-                <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '.1em', textTransform: 'uppercase', opacity: 0.75, color: tc }}>{p.code}</span>
-                <span style={{ fontSize: 14, fontWeight: 700, color: tc }}>{p.name}</span>
-              </button>
-            );
-          })}
-        </div>
-        <button type="button" onClick={onCancel} style={{ width: '100%', marginTop: 14, padding: 12, background: C.lt2, color: C.dk1, fontSize: 14, fontWeight: 700 }}>
-          Abbrechen
-        </button>
-      </div>
-    </div>
   );
 }
 
