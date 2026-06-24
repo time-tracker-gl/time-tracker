@@ -1710,6 +1710,9 @@ function TodoSheet(props: {
                 <button type="button" onClick={() => setChecklist((cl) => moveItem(cl, i, 1))} disabled={i === arr.length - 1} style={moveBtnStyle(C.dk1, C.lt2, i === arr.length - 1)}>
                   ▼
                 </button>
+                <button type="button" onClick={() => setChecklist((cl) => cl.filter((_, idx) => idx !== i))} title="Subaktivität löschen" style={moveBtnStyle(C.critical, C.lt2, false)}>
+                  ✕
+                </button>
               </div>
             ))}
           </div>
