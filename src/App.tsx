@@ -1044,7 +1044,7 @@ function BottomNav({ tab, onSelect }: { tab: Tab; onSelect: (t: Tab) => void }) 
     ['tasks', 'Daily Tasks', checklist],
     ['report', 'Reporting', '▥'],
     ['archiv', 'Archiv', archiveIcon],
-    ['admin', 'Pflege', wrench],
+    ['admin', 'Admin', wrench],
   ];
   return (
     <nav style={{ flex: '0 0 auto', display: 'flex', background: C.lt1, borderTop: '1px solid #EAEDEF' }}>
