@@ -1612,7 +1612,6 @@ function TodoSheet(props: {
 }) {
   const { initial, projects, onSave, onDelete, onPromoteSub, onClose } = props;
   const [title, setTitle] = useState(initial?.title ?? '');
-  const [category, setCategory] = useState<TodoCategory>(initial?.category ?? 'projekt');
   const [projectId, setProjectId] = useState<string | null>(initial?.projectId ?? null);
   const [plannedMin, setPlannedMin] = useState(initial?.plannedMin ?? 30);
   const [urgency, setUrgency] = useState(initial?.urgency ?? 2);
@@ -1623,13 +1622,13 @@ function TodoSheet(props: {
     initial?.checklist && initial.checklist.length ? initial.checklist.map((c) => ({ ...c })) : emptyChecklist(),
   );
   const [confirmDelete, setConfirmDelete] = useState(false);
-  // a task can be saved as soon as it has a title OR a sketch (drawing-only = provisional)
-  const canSave = title.trim().length > 0 || !!drawing;
 
-  // When a project is selected, the task's category follows that project's
-  // category; only project-less tasks pick a category manually.
+  // The category is fully determined by the (now mandatory) project.
   const selProject = projectId ? projects.find((p) => p.id === projectId) ?? null : null;
-  const effectiveCategory: TodoCategory = selProject && isCategory(selProject.category) ? selProject.category : safeCategory(category);
+  const effectiveCategory: TodoCategory = selProject && isCategory(selProject.category) ? selProject.category : safeCategory(initial?.category);
+
+  // a project plus a title or a sketch are required to save
+  const canSave = !!selProject && (title.trim().length > 0 || !!drawing);
 
   function current(): Todo {
     return {
@@ -1761,32 +1760,13 @@ function TodoSheet(props: {
             + Aktivität
           </button>
 
-          {label('Kategorie')}
-          {selProject ? (
-            <div style={{ fontSize: 13, color: C.dk1, padding: '2px 0' }}>
-              <span style={{ fontWeight: 700 }}>{CATEGORY_LABELS[effectiveCategory]}</span>
-              <span style={{ color: C.muted }}> &nbsp;·&nbsp; automatisch vom Projekt übernommen</span>
-            </div>
-          ) : (
-            <div style={{ display: 'flex', gap: 8 }}>
-              {(Object.keys(CATEGORY_LABELS) as TodoCategory[]).map((c) => (
-                <TaskPill key={c} text={CATEGORY_LABELS[c]} on={category === c} onClick={() => setCategory(c)} grow />
-              ))}
-            </div>
-          )}
-
-          {label('Projekt (optional)')}
+          {label('Projekt')}
           <select
             value={projectId ?? ''}
-            onChange={(e) => {
-              const id = e.target.value || null;
-              setProjectId(id);
-              const p = id ? projects.find((x) => x.id === id) : null;
-              if (p) setCategory(p.category);
-            }}
-            style={{ width: '100%', border: '1px solid #D5DBDF', padding: '11px 12px', fontSize: 14, color: C.dk1, background: C.lt2, outline: 'none' }}
+            onChange={(e) => setProjectId(e.target.value || null)}
+            style={{ width: '100%', border: '1px solid ' + (selProject ? '#D5DBDF' : C.critical), padding: '11px 12px', fontSize: 14, color: C.dk1, background: C.lt2, outline: 'none' }}
           >
-            <option value="">— keins —</option>
+            <option value="">— Projekt wählen —</option>
             {(['projekt', 'akquise', 'intern'] as TodoCategory[]).map((cat) => {
               const ps = projects.filter((p) => p.category === cat).sort((a, b) => a.sort - b.sort || a.name.localeCompare(b.name, 'de'));
               if (ps.length === 0) return null;
@@ -1799,6 +1779,9 @@ function TodoSheet(props: {
               );
             })}
           </select>
+          {!selProject && (
+            <div style={{ fontSize: 11, color: C.critical, marginTop: 6 }}>Pflichtfeld – die Aufgabe wird der Kategorie des Projekts zugeordnet.</div>
+          )}
 
           {label('Geplante Dauer (Minuten)')}
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
