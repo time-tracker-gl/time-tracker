@@ -441,6 +441,16 @@ export default function App() {
     setState((s) => ({ todos: s.todos.filter((t) => t.id !== id) }));
     setTodoSheet(null);
   }
+  /** Promote a sub-activity of the open task into a new standalone task. Adds the
+   *  new task and (for an already-saved parent) persists its trimmed checklist,
+   *  so the editor stays open and nothing is duplicated on cancel. */
+  function promoteSubtask(parentId: string | null, newTask: Todo, parentChecklist: ChecklistItem[]) {
+    setState((s) => {
+      let todos = s.todos.concat([newTask]);
+      if (parentId) todos = todos.map((t) => (t.id === parentId ? { ...t, checklist: parentChecklist } : t));
+      return { todos };
+    });
+  }
   /** "Erledigt" from the ToDo list (without timing): move the task to the archive. */
   function archiveTodo(id: string) {
     setState((s) => ({ todos: s.todos.map((t) => (t.id === id ? { ...t, archived: true, completedAt: localISODate() } : t)) }));
@@ -641,6 +651,7 @@ export default function App() {
             projects={s.projects}
             onSave={saveTodo}
             onDelete={todoSheet === 'new' ? undefined : () => deleteTodo(todoSheet.id)}
+            onPromoteSub={(newTask, parentChecklist) => promoteSubtask(todoSheet === 'new' ? null : todoSheet.id, newTask, parentChecklist)}
             onClose={() => setTodoSheet(null)}
           />
         )}
@@ -1589,9 +1600,11 @@ function TodoSheet(props: {
   projects: Project[];
   onSave: (t: Todo) => void;
   onDelete?: () => void;
+  /** Promote a sub-activity to its own task (new task + parent's updated checklist). */
+  onPromoteSub?: (newTask: Todo, parentChecklist: ChecklistItem[]) => void;
   onClose: () => void;
 }) {
-  const { initial, projects, onSave, onDelete, onClose } = props;
+  const { initial, projects, onSave, onDelete, onPromoteSub, onClose } = props;
   const [title, setTitle] = useState(initial?.title ?? '');
   const [category, setCategory] = useState<TodoCategory>(initial?.category ?? 'projekt');
   const [projectId, setProjectId] = useState<string | null>(initial?.projectId ?? null);
@@ -1630,6 +1643,30 @@ function TodoSheet(props: {
   function save() {
     if (!canSave) return;
     onSave(current());
+  }
+  /** Turn sub-activity i into its own task: copy the parent's data (but not its
+   *  sub-activities) and remove the row from this task. */
+  function promoteSub(i: number) {
+    const text = (checklist[i]?.text ?? '').trim();
+    if (!text || !onPromoteSub) return;
+    const rest = checklist.filter((_, idx) => idx !== i);
+    const newTask: Todo = {
+      id: 't' + Date.now(),
+      title: text,
+      category: effectiveCategory,
+      projectId,
+      plannedMin,
+      urgency,
+      importance,
+      drawing,
+      zug,
+      archived: false,
+      actualMin: null,
+      completedAt: null,
+      checklist: emptyChecklist(),
+    };
+    setChecklist(rest);
+    onPromoteSub(newTask, rest);
   }
 
   const label = (txt: string) => (
@@ -1699,6 +1736,11 @@ function TodoSheet(props: {
                 <button type="button" onClick={() => setChecklist((cl) => moveItem(cl, i, 1))} disabled={i === arr.length - 1} style={moveBtnStyle(C.dk1, C.lt2, i === arr.length - 1)}>
                   ▼
                 </button>
+                {onPromoteSub && (
+                  <button type="button" onClick={() => promoteSub(i)} disabled={it.text.trim() === ''} title="Zu eigener Aufgabe machen" style={moveBtnStyle(C.accent1, C.lt2, it.text.trim() === '')}>
+                    ↗
+                  </button>
+                )}
                 <button type="button" onClick={() => setChecklist((cl) => cl.filter((_, idx) => idx !== i))} title="Subaktivität löschen" style={moveBtnStyle(C.critical, C.lt2, false)}>
                   ✕
                 </button>
