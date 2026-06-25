@@ -518,7 +518,7 @@ export default function App() {
                 fontWeight: 500,
               }}
             >
-              Zeiterfassung
+              Task Management
             </span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>

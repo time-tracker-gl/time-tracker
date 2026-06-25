@@ -59,7 +59,7 @@ export function SetPassword({ onDone }: { onDone: () => void }) {
         <header style={{ flex: '0 0 auto', padding: '18px 20px 14px', display: 'flex', alignItems: 'baseline', gap: 9, borderBottom: '1px solid #EAEDEF' }}>
           <span style={{ fontWeight: 700, fontSize: 22, letterSpacing: '-.5px', color: C.accent1 }}>rpc</span>
           <span style={{ fontSize: 11, letterSpacing: '.14em', textTransform: 'uppercase', color: C.greyFooter, fontWeight: 500 }}>
-            Zeiterfassung
+            Task Management
           </span>
         </header>
 

@@ -3,7 +3,7 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
-  "description": "rpc Zeiterfassung – mobile Erfassungs- und Reporting-App",
+  "description": "rpc Task Management – mobile Task- und Reporting-App",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",

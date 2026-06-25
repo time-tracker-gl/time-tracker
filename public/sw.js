@@ -1,5 +1,5 @@
 /*
- * rpc Zeiterfassung – Service Worker.
+ * rpc Task Management – Service Worker.
  *
  * Macht die App installierbar und offline-startfähig:
  *  - Navigationen: network-first (immer die neueste Version, sonst die zuletzt
@@ -11,8 +11,8 @@
  *
  * Bei jedem Release die VERSION erhöhen, damit alte Caches verworfen werden.
  */
-const VERSION = 'v1';
-const CACHE = `rpc-zeit-${VERSION}`;
+const VERSION = 'v2';
+const CACHE = `rpc-tasks-${VERSION}`;
 
 self.addEventListener('install', () => {
   self.skipWaiting();
