@@ -1572,11 +1572,16 @@ function TodoSheet(props: {
   // a task can be saved as soon as it has a title OR a sketch (drawing-only = provisional)
   const canSave = title.trim().length > 0 || !!drawing;
 
+  // When a project is selected, the task's category follows that project's
+  // category; only project-less tasks pick a category manually.
+  const selProject = projectId ? projects.find((p) => p.id === projectId) ?? null : null;
+  const effectiveCategory: TodoCategory = selProject ? selProject.category : category;
+
   function current(): Todo {
     return {
       id: initial?.id ?? 't' + Date.now(),
       title: title.trim(),
-      category,
+      category: effectiveCategory,
       projectId,
       plannedMin,
       urgency,
@@ -1674,14 +1679,30 @@ function TodoSheet(props: {
           </button>
 
           {label('Kategorie')}
-          <div style={{ display: 'flex', gap: 8 }}>
-            {(Object.keys(CATEGORY_LABELS) as TodoCategory[]).map((c) => (
-              <TaskPill key={c} text={CATEGORY_LABELS[c]} on={category === c} onClick={() => setCategory(c)} grow />
-            ))}
-          </div>
+          {selProject ? (
+            <div style={{ fontSize: 13, color: C.dk1, padding: '2px 0' }}>
+              <span style={{ fontWeight: 700 }}>{CATEGORY_LABELS[effectiveCategory]}</span>
+              <span style={{ color: C.muted }}> &nbsp;·&nbsp; automatisch vom Projekt übernommen</span>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', gap: 8 }}>
+              {(Object.keys(CATEGORY_LABELS) as TodoCategory[]).map((c) => (
+                <TaskPill key={c} text={CATEGORY_LABELS[c]} on={category === c} onClick={() => setCategory(c)} grow />
+              ))}
+            </div>
+          )}
 
           {label('Projekt (optional)')}
-          <select value={projectId ?? ''} onChange={(e) => setProjectId(e.target.value || null)} style={{ width: '100%', border: '1px solid #D5DBDF', padding: '11px 12px', fontSize: 14, color: C.dk1, background: C.lt2, outline: 'none' }}>
+          <select
+            value={projectId ?? ''}
+            onChange={(e) => {
+              const id = e.target.value || null;
+              setProjectId(id);
+              const p = id ? projects.find((x) => x.id === id) : null;
+              if (p) setCategory(p.category);
+            }}
+            style={{ width: '100%', border: '1px solid #D5DBDF', padding: '11px 12px', fontSize: 14, color: C.dk1, background: C.lt2, outline: 'none' }}
+          >
             <option value="">— keins —</option>
             {(['projekt', 'akquise', 'intern'] as TodoCategory[]).map((cat) => {
               const ps = projects.filter((p) => p.category === cat).sort((a, b) => a.sort - b.sort || a.name.localeCompare(b.name, 'de'));
