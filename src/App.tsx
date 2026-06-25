@@ -1349,6 +1349,12 @@ function DailyTasksView(props: {
               {rows.map((t) => (
                 <tr key={t.id} onClick={() => onEdit(t)} style={{ cursor: 'pointer', borderBottom: '1px solid #EAEDEF', background: t.zug ? ZUG_ROW_BG : undefined }}>
                   <td style={{ ...taskCellStyle, color: C.dk1, fontWeight: 700 }}>
+                    {(() => {
+                      const pname = t.projectId ? s.projects.find((p) => p.id === t.projectId)?.name : null;
+                      return pname ? (
+                        <div style={{ fontSize: 10, fontWeight: 500, color: C.muted, marginBottom: 2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{pname}</div>
+                      ) : null;
+                    })()}
                     {t.title}
                     {(() => {
                       const items = (t.checklist ?? []).filter((c) => c.text.trim() !== '');
