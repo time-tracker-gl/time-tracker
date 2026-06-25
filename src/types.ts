@@ -1,8 +1,13 @@
 export interface Project {
   id: string;
-  code: string;
+  /** legacy short code – no longer shown or edited, kept for stored data */
+  code?: string;
   name: string;
   color: string;
+  /** which section the project belongs to in the maintenance view */
+  category: TodoCategory;
+  /** manual order within its category (ascending) */
+  sort: number;
 }
 
 /** A single sub-activity in a running booking's detail checklist. */

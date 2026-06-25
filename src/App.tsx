@@ -36,9 +36,6 @@ interface AppState {
   activeId: string | null;
   paused: boolean;
   pausedPid: string | null;
-  draftCode: string;
-  draftName: string;
-  draftColor: string;
   tab: Tab;
   sheetSegId: string | null;
   tileLayout: TileLayout;
@@ -49,12 +46,12 @@ interface AppState {
 }
 
 const SEED_PROJECTS: Project[] = [
-  { id: 'p1', code: 'EOS-01', name: 'EOS Rollout', color: '#2B5FAE' },
-  { id: 'p2', code: 'E2E-04', name: 'E2E Training', color: '#E8772E' },
-  { id: 'p3', code: 'STG-07', name: 'Stahlgruber CRM', color: '#2E8B3D' },
-  { id: 'p4', code: 'PMO-02', name: 'PMO & Steering', color: '#B6309A' },
-  { id: 'p5', code: 'INT-12', name: 'Intern / Admin', color: '#7B3FB8' },
-  { id: 'p6', code: 'AKQ-05', name: 'Akquise / Angebot', color: '#19B3C6' },
+  { id: 'p1', code: 'EOS-01', name: 'EOS Rollout', color: '#2B5FAE', category: 'projekt', sort: 0 },
+  { id: 'p2', code: 'E2E-04', name: 'E2E Training', color: '#E8772E', category: 'projekt', sort: 1 },
+  { id: 'p3', code: 'STG-07', name: 'Stahlgruber CRM', color: '#2E8B3D', category: 'projekt', sort: 2 },
+  { id: 'p4', code: 'PMO-02', name: 'PMO & Steering', color: '#B6309A', category: 'intern', sort: 0 },
+  { id: 'p5', code: 'INT-12', name: 'Intern / Admin', color: '#7B3FB8', category: 'intern', sort: 1 },
+  { id: 'p6', code: 'AKQ-05', name: 'Akquise / Angebot', color: '#19B3C6', category: 'akquise', sort: 0 },
 ];
 
 const SEED_SEGMENTS: Segment[] = [
@@ -136,7 +133,7 @@ function emptyChecklist(): ChecklistItem[] {
 /** Compact signature of the persisted data, used to avoid redundant cloud writes. */
 function dataSignature(projects: Project[], segments: Segment[], todos: Todo[]): string {
   return JSON.stringify({
-    p: projects.map((p) => [p.id, p.code, p.name, p.color]),
+    p: projects.map((p) => [p.id, p.code ?? '', p.name, p.color, p.category, p.sort]),
     s: segments.map((s) => [s.id, s.pid, s.start, s.end, s.activity, s.plannedEnd ?? null, s.checklist ?? [], s.todoId ?? null]),
     t: todos.map((t) => [t.id, t.title, t.category, t.projectId, t.plannedMin, t.actualMin ?? null, t.completedAt ?? null, t.urgency, t.importance, t.drawing, t.zug, t.archived, t.checklist ?? []]),
   });
@@ -169,9 +166,6 @@ function initialState(): AppState {
     activeId: null,
     paused: false,
     pausedPid: null,
-    draftCode: '',
-    draftName: '',
-    draftColor: PALETTE[0],
     tab: 'tasks',
     sheetSegId: null,
     tileLayout: persisted?.tileLayout ?? 'grid',
@@ -352,25 +346,36 @@ export default function App() {
   }, [run]);
 
   // ---------- actions ----------
-  function addProject() {
+  /** Add a new (empty-named) project to a category section, ready to be typed in. */
+  function addProject(category: TodoCategory) {
     setState((s) => {
-      const code = s.draftCode.trim();
-      const name = s.draftName.trim();
-      if (!code || !name) return s;
       const id = 'p' + Date.now();
       // colour is no longer shown in the UI; assign one automatically so the
       // (still required) field stays populated.
       const color = PALETTE[s.projects.length % PALETTE.length];
-      return {
-        projects: s.projects.concat([{ id, code, name, color }]),
-        draftCode: '',
-        draftName: '',
-      };
+      const inCat = s.projects.filter((p) => p.category === category);
+      const sort = inCat.length ? Math.max(...inCat.map((p) => p.sort)) + 1 : 0;
+      return { projects: s.projects.concat([{ id, code: '', name: '', color, category, sort }]) };
     });
   }
 
-  function updateProject(pid: string, field: 'code' | 'name', v: string) {
-    setState((s) => ({ projects: s.projects.map((p) => (p.id === pid ? { ...p, [field]: v } : p)) }));
+  function updateProjectName(pid: string, v: string) {
+    setState((s) => ({ projects: s.projects.map((p) => (p.id === pid ? { ...p, name: v } : p)) }));
+  }
+
+  /** Move a project up/down within its category (normalises sort on each move). */
+  function moveProject(pid: string, dir: -1 | 1) {
+    setState((s) => {
+      const p = s.projects.find((x) => x.id === pid);
+      if (!p) return s;
+      const ordered = s.projects.filter((x) => x.category === p.category).sort((a, b) => a.sort - b.sort || a.name.localeCompare(b.name, 'de'));
+      const idx = ordered.findIndex((x) => x.id === pid);
+      const j = idx + dir;
+      if (j < 0 || j >= ordered.length) return s;
+      [ordered[idx], ordered[j]] = [ordered[j], ordered[idx]];
+      const sortById = new Map(ordered.map((x, i) => [x.id, i]));
+      return { projects: s.projects.map((x) => (sortById.has(x.id) ? { ...x, sort: sortById.get(x.id)! } : x)) };
+    });
   }
 
   function deleteProject(pid: string) {
@@ -569,9 +574,9 @@ export default function App() {
           {isAdmin && (
             <AdminView
               state={s}
-              onUpdateProject={updateProject}
+              onUpdateName={updateProjectName}
+              onMoveProject={moveProject}
               onDeleteProject={deleteProject}
-              onSetDraft={(field, v) => setState({ [field]: v } as Partial<AppState>)}
               onAddProject={addProject}
               accountEmail={isSupabaseConfigured ? userEmail : null}
               onLogout={logout}
@@ -876,15 +881,53 @@ function ReportView(props: {
 /* ======================= PFLEGE ======================= */
 function AdminView(props: {
   state: AppState;
-  onUpdateProject: (pid: string, field: 'code' | 'name', v: string) => void;
+  onUpdateName: (pid: string, v: string) => void;
+  onMoveProject: (pid: string, dir: -1 | 1) => void;
   onDeleteProject: (pid: string) => void;
-  onSetDraft: (field: 'draftCode' | 'draftName', v: string) => void;
-  onAddProject: () => void;
+  onAddProject: (category: TodoCategory) => void;
   accountEmail: string | null;
   onLogout: () => void;
 }) {
-  const { state: s, onUpdateProject, onDeleteProject, onSetDraft, onAddProject, accountEmail, onLogout } = props;
-  const canAdd = !!(s.draftCode.trim() && s.draftName.trim());
+  const { state: s, onUpdateName, onMoveProject, onDeleteProject, onAddProject, accountEmail, onLogout } = props;
+
+  const section = (cat: TodoCategory) => {
+    const rows = s.projects.filter((p) => p.category === cat).sort((a, b) => a.sort - b.sort || a.name.localeCompare(b.name, 'de'));
+    return (
+      <div key={cat} style={{ marginBottom: 22 }}>
+        <div style={{ fontSize: 11, letterSpacing: '.12em', textTransform: 'uppercase', color: C.accent1, fontWeight: 700, marginBottom: 8 }}>
+          {CATEGORY_LABELS[cat]} <span style={{ color: C.muted }}>({rows.length})</span>
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {rows.map((p, i, arr) => (
+            <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <input
+                value={p.name}
+                onChange={(e) => onUpdateName(p.id, e.target.value)}
+                placeholder="Projektname …"
+                style={{ flex: '1 1 auto', minWidth: 0, border: '1px solid #D5DBDF', padding: '8px 10px', fontSize: 14, color: C.dk1, background: C.lt2, outline: 'none' }}
+              />
+              <button type="button" onClick={() => onMoveProject(p.id, -1)} disabled={i === 0} style={moveBtnStyle(C.dk1, C.lt2, i === 0)}>
+                ▲
+              </button>
+              <button type="button" onClick={() => onMoveProject(p.id, 1)} disabled={i === arr.length - 1} style={moveBtnStyle(C.dk1, C.lt2, i === arr.length - 1)}>
+                ▼
+              </button>
+              <button type="button" onClick={() => onDeleteProject(p.id)} title="Projekt löschen" style={moveBtnStyle(C.critical, C.lt2, false)}>
+                ✕
+              </button>
+            </div>
+          ))}
+        </div>
+        <button
+          type="button"
+          onClick={() => onAddProject(cat)}
+          style={{ marginTop: 8, padding: '7px 12px', background: C.lt2, color: C.dk1, fontSize: 12, fontWeight: 700 }}
+        >
+          + Projekt
+        </button>
+      </div>
+    );
+  };
 
   return (
     <section style={{ padding: '18px 20px 36px' }}>
@@ -892,78 +935,10 @@ function AdminView(props: {
         Projekte verwalten
       </div>
       <p style={{ fontSize: 12, lineHeight: 1.5, color: C.greyFooter, margin: '0 0 18px' }}>
-        Code &amp; Name der Projekte bearbeiten oder Projekte löschen.
+        Projekte je Bereich anlegen, umbenennen, sortieren oder löschen.
       </p>
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-        {s.projects.map((p) => (
-          <div key={p.id} style={{ display: 'flex', alignItems: 'center', border: '1px solid #E1E5E8', background: C.lt1 }}>
-            <div style={{ flex: '1 1 auto', minWidth: 0, padding: '8px 12px', display: 'flex', flexDirection: 'column', gap: 2 }}>
-              <input
-                value={p.code}
-                onChange={(e) => onUpdateProject(p.id, 'code', e.target.value)}
-                style={{ border: 'none', outline: 'none', padding: 0, fontSize: 11, fontWeight: 700, letterSpacing: '.1em', textTransform: 'uppercase', color: C.greyFooter, background: 'transparent' }}
-              />
-              <input
-                value={p.name}
-                onChange={(e) => onUpdateProject(p.id, 'name', e.target.value)}
-                style={{ border: 'none', outline: 'none', padding: 0, fontSize: 16, fontWeight: 700, color: C.dk1, background: 'transparent' }}
-              />
-            </div>
-            <button type="button" title="Löschen" onClick={() => onDeleteProject(p.id)} style={{ flex: '0 0 auto', width: 46, alignSelf: 'stretch', color: C.muted, fontSize: 18 }}>
-              ×
-            </button>
-          </div>
-        ))}
-      </div>
-
-      <div style={{ marginTop: 24, borderTop: '2px solid #074771', paddingTop: 18 }}>
-        <div style={{ fontSize: 11, letterSpacing: '.14em', textTransform: 'uppercase', color: C.accent1, fontWeight: 700, marginBottom: 14 }}>
-          Neues Projekt anlegen
-        </div>
-        <div style={{ display: 'flex', gap: 10 }}>
-          <div style={{ flex: '0 0 116px' }}>
-            <label style={{ display: 'block', fontSize: 11, letterSpacing: '.08em', textTransform: 'uppercase', color: C.greyFooter, fontWeight: 700, marginBottom: 5 }}>
-              Code
-            </label>
-            <input
-              value={s.draftCode}
-              onChange={(e) => onSetDraft('draftCode', e.target.value)}
-              placeholder="z. B. NEU-01"
-              style={{ width: '100%', border: '1px solid #D5DBDF', padding: '11px 12px', fontSize: 14, color: C.dk1, outline: 'none', background: C.lt2 }}
-            />
-          </div>
-          <div style={{ flex: '1 1 auto', minWidth: 0 }}>
-            <label style={{ display: 'block', fontSize: 11, letterSpacing: '.08em', textTransform: 'uppercase', color: C.greyFooter, fontWeight: 700, marginBottom: 5 }}>
-              Name
-            </label>
-            <input
-              value={s.draftName}
-              onChange={(e) => onSetDraft('draftName', e.target.value)}
-              placeholder="Projektbezeichnung"
-              style={{ width: '100%', border: '1px solid #D5DBDF', padding: '11px 12px', fontSize: 14, color: C.dk1, outline: 'none', background: C.lt2 }}
-            />
-          </div>
-        </div>
-        <button
-          type="button"
-          onClick={onAddProject}
-          disabled={!canAdd}
-          style={{
-            width: '100%',
-            marginTop: 14,
-            padding: 14,
-            background: canAdd ? C.accent1 : '#C7CFD4',
-            color: C.lt1,
-            fontSize: 14,
-            fontWeight: 700,
-            letterSpacing: '.04em',
-            cursor: canAdd ? 'pointer' : 'not-allowed',
-          }}
-        >
-          Projekt anlegen
-        </button>
-      </div>
+      {(['projekt', 'akquise', 'intern'] as TodoCategory[]).map((c) => section(c))}
 
       {accountEmail && (
         <div style={{ marginTop: 26, borderTop: '1px solid #EAEDEF', paddingTop: 16, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
@@ -1708,12 +1683,17 @@ function TodoSheet(props: {
           {label('Projekt (optional)')}
           <select value={projectId ?? ''} onChange={(e) => setProjectId(e.target.value || null)} style={{ width: '100%', border: '1px solid #D5DBDF', padding: '11px 12px', fontSize: 14, color: C.dk1, background: C.lt2, outline: 'none' }}>
             <option value="">— keins —</option>
-            {projects
-              .slice()
-              .sort((a, b) => `${a.code} · ${a.name}`.localeCompare(`${b.code} · ${b.name}`, 'de', { sensitivity: 'base' }))
-              .map((p) => (
-                <option key={p.id} value={p.id}>{p.code} · {p.name}</option>
-              ))}
+            {(['projekt', 'akquise', 'intern'] as TodoCategory[]).map((cat) => {
+              const ps = projects.filter((p) => p.category === cat).sort((a, b) => a.sort - b.sort || a.name.localeCompare(b.name, 'de'));
+              if (ps.length === 0) return null;
+              return (
+                <optgroup key={cat} label={CATEGORY_LABELS[cat]}>
+                  {ps.map((p) => (
+                    <option key={p.id} value={p.id}>{p.name}</option>
+                  ))}
+                </optgroup>
+              );
+            })}
           </select>
 
           {label('Geplante Dauer (Minuten)')}

@@ -11,9 +11,11 @@ export function localISODate(d = new Date()): string {
 
 interface DbProject {
   id: string;
-  code: string;
+  code: string | null;
   name: string;
   color: string;
+  category?: string | null;
+  sort?: number | null;
 }
 interface DbSegment {
   id: string;
@@ -44,12 +46,20 @@ function mapSegment(s: DbSegment): Segment {
 
 export async function loadProjects(): Promise<Project[]> {
   if (!supabase) return [];
+  // select('*') so newer columns (category, sort) don't break loading on older DBs
   const { data, error } = await supabase
     .from('projects')
-    .select('id, code, name, color')
+    .select('*')
     .order('created_at', { ascending: true });
   if (error) throw error;
-  return (data as DbProject[]).map((p) => ({ id: p.id, code: p.code, name: p.name, color: p.color }));
+  return (data as DbProject[]).map((p) => ({
+    id: p.id,
+    code: p.code ?? '',
+    name: p.name,
+    color: p.color,
+    category: (p.category ?? 'projekt') as TodoCategory,
+    sort: p.sort ?? 0,
+  }));
 }
 
 export async function loadSegments(day: string): Promise<Segment[]> {
@@ -83,7 +93,7 @@ export async function seedDefaultProjects(defaults: Project[]): Promise<void> {
   if (!supabase || defaults.length === 0) return;
   const { error } = await supabase
     .from('projects')
-    .insert(defaults.map((p) => ({ id: p.id, code: p.code, name: p.name, color: p.color })));
+    .insert(defaults.map((p) => ({ id: p.id, code: p.code ?? '', name: p.name, color: p.color, category: p.category, sort: p.sort })));
   if (error) throw error;
 }
 
@@ -101,7 +111,7 @@ export async function syncProjects(projects: Project[]): Promise<void> {
   if (projects.length) {
     const { error } = await supabase
       .from('projects')
-      .upsert(projects.map((p) => ({ id: p.id, code: p.code, name: p.name, color: p.color })));
+      .upsert(projects.map((p) => ({ id: p.id, code: p.code ?? '', name: p.name, color: p.color, category: p.category, sort: p.sort })));
     if (error) throw error;
   }
 }

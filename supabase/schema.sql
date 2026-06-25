@@ -15,6 +15,10 @@ create table if not exists public.projects (
 
 create index if not exists projects_user_idx on public.projects (user_id, created_at);
 
+-- Projects are grouped into categories and manually ordered in the maintenance view.
+alter table public.projects add column if not exists category text not null default 'projekt';
+alter table public.projects add column if not exists sort integer not null default 0;
+
 alter table public.projects enable row level security;
 
 drop policy if exists "projects are owned" on public.projects;
