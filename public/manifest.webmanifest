@@ -1,7 +1,7 @@
 {
-  "name": "rpc Zeiterfassung",
-  "short_name": "rpc Zeit",
-  "description": "Mobile Zeiterfassung – rpc",
+  "name": "rpc Task Management",
+  "short_name": "rpc Tasks",
+  "description": "Mobile Task Management – rpc",
   "lang": "de",
   "dir": "ltr",
   "id": "./",
