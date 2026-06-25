@@ -1698,6 +1698,29 @@ function TodoSheet(props: {
           <div style={{ fontSize: 20, fontWeight: 700, color: C.lt1 }}>{initial ? 'Aufgabe bearbeiten' : 'Neue Aufgabe'}</div>
         </div>
         <div style={{ padding: '4px 20px 24px' }}>
+          {label('Projekt')}
+          <select
+            value={projectId ?? ''}
+            onChange={(e) => setProjectId(e.target.value || null)}
+            style={{ width: '100%', border: '1px solid ' + (selProject ? '#D5DBDF' : C.critical), padding: '11px 12px', fontSize: 14, color: C.dk1, background: C.lt2, outline: 'none' }}
+          >
+            <option value="">— Projekt wählen —</option>
+            {(['projekt', 'akquise', 'intern'] as TodoCategory[]).map((cat) => {
+              const ps = projects.filter((p) => p.category === cat).sort((a, b) => a.sort - b.sort || a.name.localeCompare(b.name, 'de'));
+              if (ps.length === 0) return null;
+              return (
+                <optgroup key={cat} label={CATEGORY_LABELS[cat]}>
+                  {ps.map((p) => (
+                    <option key={p.id} value={p.id}>{p.name}</option>
+                  ))}
+                </optgroup>
+              );
+            })}
+          </select>
+          {!selProject && (
+            <div style={{ fontSize: 11, color: C.critical, marginTop: 6 }}>Pflichtfeld – die Aufgabe wird der Kategorie des Projekts zugeordnet.</div>
+          )}
+
           {label('Aufgabe')}
           <textarea value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Was ist zu tun?" style={{ width: '100%', height: 64, resize: 'none', border: '1px solid #D5DBDF', padding: '11px 12px', fontSize: 15, lineHeight: 1.4, color: C.dk1, outline: 'none', background: C.lt2, userSelect: 'text', WebkitUserSelect: 'text' }} />
 
@@ -1742,29 +1765,6 @@ function TodoSheet(props: {
           >
             + Aktivität
           </button>
-
-          {label('Projekt')}
-          <select
-            value={projectId ?? ''}
-            onChange={(e) => setProjectId(e.target.value || null)}
-            style={{ width: '100%', border: '1px solid ' + (selProject ? '#D5DBDF' : C.critical), padding: '11px 12px', fontSize: 14, color: C.dk1, background: C.lt2, outline: 'none' }}
-          >
-            <option value="">— Projekt wählen —</option>
-            {(['projekt', 'akquise', 'intern'] as TodoCategory[]).map((cat) => {
-              const ps = projects.filter((p) => p.category === cat).sort((a, b) => a.sort - b.sort || a.name.localeCompare(b.name, 'de'));
-              if (ps.length === 0) return null;
-              return (
-                <optgroup key={cat} label={CATEGORY_LABELS[cat]}>
-                  {ps.map((p) => (
-                    <option key={p.id} value={p.id}>{p.name}</option>
-                  ))}
-                </optgroup>
-              );
-            })}
-          </select>
-          {!selProject && (
-            <div style={{ fontSize: 11, color: C.critical, marginTop: 6 }}>Pflichtfeld – die Aufgabe wird der Kategorie des Projekts zugeordnet.</div>
-          )}
 
           {label('Geplante Dauer (Minuten)')}
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
