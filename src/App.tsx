@@ -27,6 +27,15 @@ const CATEGORY_LABELS: Record<TodoCategory, string> = {
   akquise: 'Akquise',
   intern: 'Intern',
 };
+const TASK_CATEGORIES: TodoCategory[] = ['projekt', 'akquise', 'intern'];
+/** Type guard + fallback helper so a task can never fall outside the three known
+ *  categories (which would make it invisible in the grouped lists). */
+function isCategory(c: unknown): c is TodoCategory {
+  return typeof c === 'string' && (TASK_CATEGORIES as string[]).includes(c);
+}
+function safeCategory(c: unknown): TodoCategory {
+  return isCategory(c) ? c : 'projekt';
+}
 
 
 interface AppState {
@@ -145,8 +154,14 @@ function loadPersisted(): Pick<AppState, 'projects' | 'segments' | 'tileLayout' 
     if (!raw) return null;
     const data = JSON.parse(raw);
     if (!Array.isArray(data.projects)) return null;
+    // older stored projects may predate the category/sort fields – default them
+    const projects: Project[] = data.projects.map((p: Project, i: number) => ({
+      ...p,
+      category: isCategory(p.category) ? p.category : 'projekt',
+      sort: typeof p.sort === 'number' ? p.sort : i,
+    }));
     return {
-      projects: data.projects,
+      projects,
       segments: data.segments ?? [],
       tileLayout: data.tileLayout ?? 'grid',
       todos: data.todos ?? [],
@@ -344,6 +359,26 @@ export default function App() {
       /* ignore quota / privacy-mode errors */
     }
   }, [run]);
+
+  // Repair task categories once data is loaded: align each task with its project's
+  // category and fold any invalid/empty category back to a known one, so no task
+  // can stay invisible in the grouped lists.
+  useEffect(() => {
+    if (!dataLoaded) return;
+    setStateRaw((prev) => {
+      let changed = false;
+      const todos = prev.todos.map((t) => {
+        const p = t.projectId ? prev.projects.find((x) => x.id === t.projectId) : null;
+        const next = p && isCategory(p.category) ? p.category : safeCategory(t.category);
+        if (next !== t.category) {
+          changed = true;
+          return { ...t, category: next };
+        }
+        return t;
+      });
+      return changed ? { ...prev, todos } : prev;
+    });
+  }, [dataLoaded]);
 
   // ---------- actions ----------
   /** Add a new (empty-named) project to a category section, ready to be typed in. */
@@ -757,7 +792,7 @@ function ReportView(props: {
   // Ist-time per category
   const catRows = (Object.keys(CATEGORY_LABELS) as TodoCategory[]).map((c) => ({
     cat: c,
-    min: timed.filter((t) => t.category === c).reduce((a, t) => a + (t.actualMin ?? 0), 0),
+    min: timed.filter((t) => safeCategory(t.category) === c).reduce((a, t) => a + (t.actualMin ?? 0), 0),
   }));
   const catTotal = catRows.reduce((a, r) => a + r.min, 0);
 
@@ -1271,7 +1306,7 @@ function DailyTasksView(props: {
 
   // "concrete" tasks (with a title) are grouped by category; title-less ones are provisional
   const categoryTable = (cat: TodoCategory) => {
-    const rows = s.todos.filter((t) => !t.archived && t.category === cat && t.title.trim() !== '').sort(cmp);
+    const rows = s.todos.filter((t) => !t.archived && safeCategory(t.category) === cat && t.title.trim() !== '').sort(cmp);
     return (
       <div key={cat} style={{ marginBottom: 22 }}>
         <div style={{ fontSize: 11, letterSpacing: '.12em', textTransform: 'uppercase', color: C.accent1, fontWeight: 700, marginBottom: 8 }}>
@@ -1575,7 +1610,7 @@ function TodoSheet(props: {
   // When a project is selected, the task's category follows that project's
   // category; only project-less tasks pick a category manually.
   const selProject = projectId ? projects.find((p) => p.id === projectId) ?? null : null;
-  const effectiveCategory: TodoCategory = selProject ? selProject.category : category;
+  const effectiveCategory: TodoCategory = selProject && isCategory(selProject.category) ? selProject.category : safeCategory(category);
 
   function current(): Todo {
     return {
