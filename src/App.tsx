@@ -3,7 +3,6 @@ import type { ChecklistItem, Gap, Project, ReportPeriod, Segment, Tab, TileLayou
 import { C, PALETTE } from './theme';
 import { fmtClock, fmtDur, nowMinutes } from './lib/time';
 import { periodRange } from './lib/aggregate';
-import { DrawingPad } from './components/DrawingPad';
 import { isSupabaseConfigured, supabase } from './lib/supabase';
 import { Login } from './components/Login';
 import { SetPassword } from './components/SetPassword';
@@ -1616,7 +1615,6 @@ function TodoSheet(props: {
   const [plannedMin, setPlannedMin] = useState(initial?.plannedMin ?? 30);
   const [urgency, setUrgency] = useState(initial?.urgency ?? 2);
   const [importance, setImportance] = useState(initial?.importance ?? 2);
-  const [drawing, setDrawing] = useState<string | null>(initial?.drawing ?? null);
   const [zug, setZug] = useState<boolean>(initial?.zug ?? false);
   const [checklist, setChecklist] = useState<ChecklistItem[]>(
     initial?.checklist && initial.checklist.length ? initial.checklist.map((c) => ({ ...c })) : emptyChecklist(),
@@ -1627,8 +1625,8 @@ function TodoSheet(props: {
   const selProject = projectId ? projects.find((p) => p.id === projectId) ?? null : null;
   const effectiveCategory: TodoCategory = selProject && isCategory(selProject.category) ? selProject.category : safeCategory(initial?.category);
 
-  // a project plus a title or a sketch are required to save
-  const canSave = !!selProject && (title.trim().length > 0 || !!drawing);
+  // a project and a title are required to save
+  const canSave = !!selProject && title.trim().length > 0;
 
   function current(): Todo {
     return {
@@ -1639,7 +1637,7 @@ function TodoSheet(props: {
       plannedMin,
       urgency,
       importance,
-      drawing,
+      drawing: initial?.drawing ?? null,
       zug,
       archived: initial?.archived ?? false,
       checklist,
@@ -1663,7 +1661,7 @@ function TodoSheet(props: {
       plannedMin,
       urgency,
       importance,
-      drawing,
+      drawing: null,
       zug,
       archived: false,
       actualMin: null,
@@ -1700,23 +1698,8 @@ function TodoSheet(props: {
           <div style={{ fontSize: 20, fontWeight: 700, color: C.lt1 }}>{initial ? 'Aufgabe bearbeiten' : 'Neue Aufgabe'}</div>
         </div>
         <div style={{ padding: '4px 20px 24px' }}>
-          {label('Skizze (optional)')}
-          <DrawingPad value={drawing} onChange={setDrawing} />
-
-          <button
-            type="button"
-            onClick={save}
-            disabled={!canSave}
-            style={{ width: '100%', marginTop: 12, padding: 13, background: canSave ? C.accent1 : '#C7CFD4', color: C.lt1, fontSize: 14, fontWeight: 700, cursor: canSave ? 'pointer' : 'not-allowed' }}
-          >
-            Speichern
-          </button>
-
           {label('Aufgabe')}
-          <textarea value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Was ist zu tun? – oder leer lassen und nur skizzieren" style={{ width: '100%', height: 64, resize: 'none', border: '1px solid #D5DBDF', padding: '11px 12px', fontSize: 15, lineHeight: 1.4, color: C.dk1, outline: 'none', background: C.lt2, userSelect: 'text', WebkitUserSelect: 'text' }} />
-          <div style={{ fontSize: 11, color: C.muted, marginTop: 6 }}>
-            Ohne Titel wird die Aufgabe als „vorläufig" gespeichert und kann später konkretisiert werden.
-          </div>
+          <textarea value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Was ist zu tun?" style={{ width: '100%', height: 64, resize: 'none', border: '1px solid #D5DBDF', padding: '11px 12px', fontSize: 15, lineHeight: 1.4, color: C.dk1, outline: 'none', background: C.lt2, userSelect: 'text', WebkitUserSelect: 'text' }} />
 
           {label('Aktivitäten')}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
