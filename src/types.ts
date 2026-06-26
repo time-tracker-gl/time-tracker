@@ -8,6 +8,9 @@ export interface Project {
   category: TodoCategory;
   /** manual order within its category (ascending) */
   sort: number;
+  /** soft-deleted: hidden from maintenance & task assignment, but kept so the
+   *  Reporting can still show historical tasks of a removed project. */
+  archived?: boolean;
 }
 
 /** A single sub-activity in a running booking's detail checklist. */

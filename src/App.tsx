@@ -141,7 +141,7 @@ function emptyChecklist(): ChecklistItem[] {
 /** Compact signature of the persisted data, used to avoid redundant cloud writes. */
 function dataSignature(projects: Project[], segments: Segment[], todos: Todo[]): string {
   return JSON.stringify({
-    p: projects.map((p) => [p.id, p.code ?? '', p.name, p.color, p.category, p.sort]),
+    p: projects.map((p) => [p.id, p.code ?? '', p.name, p.color, p.category, p.sort, p.archived ?? false]),
     s: segments.map((s) => [s.id, s.pid, s.start, s.end, s.activity, s.plannedEnd ?? null, s.checklist ?? [], s.todoId ?? null]),
     t: todos.map((t) => [t.id, t.title, t.category, t.projectId, t.plannedMin, t.actualMin ?? null, t.completedAt ?? null, t.urgency, t.importance, t.drawing, t.zug, t.archived, t.checklist ?? []]),
   });
@@ -461,9 +461,9 @@ export default function App() {
       // colour is no longer shown in the UI; assign one automatically so the
       // (still required) field stays populated.
       const color = PALETTE[s.projects.length % PALETTE.length];
-      const inCat = s.projects.filter((p) => p.category === category);
+      const inCat = s.projects.filter((p) => p.category === category && !p.archived);
       const sort = inCat.length ? Math.max(...inCat.map((p) => p.sort)) + 1 : 0;
-      return { projects: s.projects.concat([{ id, code: '', name: '', color, category, sort }]) };
+      return { projects: s.projects.concat([{ id, code: '', name: '', color, category, sort, archived: false }]) };
     });
   }
 
@@ -476,7 +476,7 @@ export default function App() {
     setState((s) => {
       const p = s.projects.find((x) => x.id === pid);
       if (!p) return s;
-      const ordered = s.projects.filter((x) => x.category === p.category).sort((a, b) => a.sort - b.sort || a.name.localeCompare(b.name, 'de'));
+      const ordered = s.projects.filter((x) => x.category === p.category && !x.archived).sort((a, b) => a.sort - b.sort || a.name.localeCompare(b.name, 'de'));
       const idx = ordered.findIndex((x) => x.id === pid);
       const j = idx + dir;
       if (j < 0 || j >= ordered.length) return s;
@@ -486,13 +486,14 @@ export default function App() {
     });
   }
 
+  /** Soft-delete a project: hide it from maintenance & assignment, but keep it so
+   *  the Reporting can still show historical tasks of that project. */
   function deleteProject(pid: string) {
     setState((s) => {
       const cur = s.activeId ? s.segments.find((g) => g.id === s.activeId) : null;
       const clearActive = !!cur && cur.pid === pid;
       return {
-        projects: s.projects.filter((p) => p.id !== pid),
-        segments: s.segments.filter((g) => g.pid !== pid),
+        projects: s.projects.map((p) => (p.id === pid ? { ...p, archived: true } : p)),
         activeId: clearActive ? null : s.activeId,
         paused: s.pausedPid === pid ? false : s.paused,
         pausedPid: s.pausedPid === pid ? null : s.pausedPid,
@@ -657,6 +658,7 @@ export default function App() {
               period={s.reportPeriod}
               onSetPeriod={(p) => setState({ reportPeriod: p })}
               today={today}
+              onEdit={(t) => setTodoSheet(t)}
             />
           )}
 
@@ -780,217 +782,171 @@ const CATEGORY_COLORS: Record<TodoCategory, string> = {
   intern: '#7B3FB8',
 };
 
-/** YYYY-MM-DD → local Date at midnight (avoids UTC off-by-one). */
-function parseDay(s: string): Date {
-  const [y, m, d] = s.split('-').map(Number);
-  return new Date(y, (m || 1) - 1, d || 1);
-}
-function dayKey(d: Date): string {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const dd = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${dd}`;
-}
-function addDays(d: Date, n: number): Date {
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate() + n);
-}
-/** Monday (local) of the week containing d. */
-function mondayOf(d: Date): Date {
-  const wd = (d.getDay() + 6) % 7; // 0 = Monday
-  return addDays(d, -wd);
-}
-
-interface ReportBucket {
-  key: string;
-  label: string;
-  hours: number;
-  count: number;
-}
-
-/** Group completed tasks into chart buckets: days (Woche), weeks (Monat) or
- *  months (Jahr). Empty buckets are kept so the time axis stays continuous. */
-function reportBuckets(tasks: Todo[], period: ReportPeriod, from: string, to: string): ReportBucket[] {
-  const buckets: ReportBucket[] = [];
-  const idx = new Map<string, number>();
-  const fromD = parseDay(from);
-  const toD = parseDay(to);
-
-  if (period === 'jahr') {
-    const year = fromD.getFullYear();
-    const M = ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dez'];
-    for (let m = 0; m < 12; m++) idx.set(`${year}-${String(m + 1).padStart(2, '0')}`, buckets.push({ key: '', label: M[m], hours: 0, count: 0 }) - 1);
-    for (const t of tasks) {
-      const i = idx.get((t.completedAt ?? '').slice(0, 7));
-      if (i != null) { buckets[i].hours += (t.actualMin ?? 0) / 60; buckets[i].count += 1; }
-    }
-  } else if (period === 'monat') {
-    for (let d = mondayOf(fromD); d <= toD; d = addDays(d, 7)) {
-      const key = dayKey(d);
-      idx.set(key, buckets.push({ key, label: d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' }), hours: 0, count: 0 }) - 1);
-    }
-    for (const t of tasks) {
-      const i = idx.get(dayKey(mondayOf(parseDay(t.completedAt!))));
-      if (i != null) { buckets[i].hours += (t.actualMin ?? 0) / 60; buckets[i].count += 1; }
-    }
-  } else {
-    // Woche (and any other range): one bucket per day
-    for (let d = fromD; d <= toD; d = addDays(d, 1)) {
-      const key = dayKey(d);
-      idx.set(key, buckets.push({ key, label: d.toLocaleDateString('de-DE', { weekday: 'short' }), hours: 0, count: 0 }) - 1);
-    }
-    for (const t of tasks) {
-      const i = idx.get(t.completedAt!);
-      if (i != null) { buckets[i].hours += (t.actualMin ?? 0) / 60; buckets[i].count += 1; }
-    }
-  }
-  return buckets;
-}
+type GroupMode = 'project' | 'category';
+type ReportSort = 'importance' | 'duration' | 'date';
+const NO_PROJECT = '__none__';
 
 function ReportView(props: {
   state: AppState;
   period: ReportPeriod;
   onSetPeriod: (p: ReportPeriod) => void;
   today: Date;
+  onEdit: (t: Todo) => void;
 }) {
-  const { state: s, period, onSetPeriod, today } = props;
+  const { state: s, period, onSetPeriod, today, onEdit } = props;
+  const [groupMode, setGroupMode] = useState<GroupMode>('project');
+  const [selected, setSelected] = useState<string | null>(null);
+  const [sortKey, setSortKey] = useState<ReportSort>('date');
+
   const { from, to } = periodRange(period, s.custFrom, s.custTo, today);
-
-  // completed tasks in the selected slice (legacy ones without a date are ignored
-  // here – the Archive still lists them)
+  // completed tasks in the slice (legacy ones without a date are listed in Archiv)
   const done = s.todos.filter((t) => t.archived && t.completedAt && t.completedAt >= from && t.completedAt <= to);
-  const timed = done.filter((t) => t.actualMin != null);
 
+  // resolve project names incl. soft-deleted ("archived") ones, so history stays visible
+  const projById = new Map(s.projects.map((p) => [p.id, p] as const));
+  const projName = (id: string | null) => (id ? projById.get(id)?.name : null) || '(kein Projekt)';
+  const groupOf = (t: Todo) => (groupMode === 'category' ? safeCategory(t.category) : t.projectId ?? NO_PROJECT);
+  const groupLabel = (key: string) => (groupMode === 'category' ? CATEGORY_LABELS[key as TodoCategory] : projName(key === NO_PROJECT ? null : key));
+  const groupColor = (key: string) => (groupMode === 'category' ? CATEGORY_COLORS[key as TodoCategory] : projById.get(key)?.color ?? '#9AA7B0');
+  const groupRemoved = (key: string) => groupMode === 'project' && key !== NO_PROJECT && !!projById.get(key)?.archived;
+
+  const gmap = new Map<string, { count: number; min: number }>();
+  for (const t of done) {
+    const k = groupOf(t);
+    const g = gmap.get(k) ?? { count: 0, min: 0 };
+    g.count += 1;
+    g.min += t.actualMin ?? 0;
+    gmap.set(k, g);
+  }
+  const groups = [...gmap.entries()].map(([key, v]) => ({ key, ...v })).sort((a, b) => b.count - a.count || b.min - a.min);
+  const activeSel = selected && gmap.has(selected) ? selected : null;
+  const maxCount = Math.max(1, ...groups.map((g) => g.count));
+
+  const dur = (t: Todo) => t.actualMin ?? t.plannedMin;
+  const list = done
+    .filter((t) => !activeSel || groupOf(t) === activeSel)
+    .slice()
+    .sort((a, b) => {
+      if (sortKey === 'importance') return a.importance - b.importance || dur(b) - dur(a);
+      if (sortKey === 'duration') return dur(b) - dur(a);
+      return a.completedAt! < b.completedAt! ? 1 : a.completedAt! > b.completedAt! ? -1 : 0;
+    });
+
+  const totalMin = done.reduce((a, t) => a + (t.actualMin ?? 0), 0);
+  const timed = done.filter((t) => t.actualMin != null);
   const totalPlanned = timed.reduce((a, t) => a + t.plannedMin, 0);
   const totalActual = timed.reduce((a, t) => a + (t.actualMin ?? 0), 0);
   const deviation = totalPlanned > 0 ? Math.round(((totalActual - totalPlanned) / totalPlanned) * 100) : 0;
-  // per-task estimate quality (±10 % counts as "im Plan")
-  let onPlan = 0, over = 0, under = 0;
-  for (const t of timed) {
-    const d = (t.actualMin ?? 0) - t.plannedMin;
-    const tol = Math.max(2, t.plannedMin * 0.1);
-    if (d > tol) over++;
-    else if (d < -tol) under++;
-    else onPlan++;
-  }
-
-  // Ist-time per category
-  const catRows = (Object.keys(CATEGORY_LABELS) as TodoCategory[]).map((c) => ({
-    cat: c,
-    min: timed.filter((t) => safeCategory(t.category) === c).reduce((a, t) => a + (t.actualMin ?? 0), 0),
-  }));
-  const catTotal = catRows.reduce((a, r) => a + r.min, 0);
-
-  const buckets = reportBuckets(done, period, from, to);
-  const maxHours = Math.max(0.001, ...buckets.map((b) => b.hours));
   const avgMin = timed.length > 0 ? Math.round(totalActual / timed.length) : 0;
 
-  const periodDefs: [ReportPeriod, string][] = [
-    ['woche', 'Woche'],
-    ['monat', 'Monat'],
-    ['jahr', 'Jahr'],
-  ];
-
+  const segBar = <T extends string>(opts: [T, string][], val: T, set: (v: T) => void) => (
+    <div style={{ display: 'flex', border: '1px solid #D5DBDF', background: C.lt2, overflow: 'hidden' }}>
+      {opts.map(([k, lbl]) => (
+        <button key={k} type="button" onClick={() => set(k)} style={{ flex: '1 1 auto', padding: '8px 4px', fontSize: 12, fontWeight: 700, textAlign: 'center', color: val === k ? C.lt1 : '#5E7184', background: val === k ? C.accent1 : 'transparent' }}>
+          {lbl}
+        </button>
+      ))}
+    </div>
+  );
   const sectionLabel = (txt: string) => (
-    <div style={{ fontSize: 11, letterSpacing: '.12em', textTransform: 'uppercase', color: C.greyFooter, fontWeight: 700, marginBottom: 12, marginTop: 28 }}>{txt}</div>
+    <div style={{ fontSize: 11, letterSpacing: '.12em', textTransform: 'uppercase', color: C.greyFooter, fontWeight: 700, margin: '26px 0 10px' }}>{txt}</div>
   );
 
   return (
     <section style={{ padding: '18px 20px 36px' }}>
-      <div style={{ display: 'flex', border: '1px solid #D5DBDF', background: C.lt2, marginBottom: 20, overflow: 'hidden' }}>
-        {periodDefs.map(([k, label]) => (
-          <button
-            key={k}
-            type="button"
-            onClick={() => onSetPeriod(k)}
-            style={{ flex: '1 1 auto', padding: '9px 4px', fontSize: 12, fontWeight: 700, textAlign: 'center', color: period === k ? C.lt1 : '#5E7184', background: period === k ? C.accent1 : 'transparent' }}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
+      <div style={{ marginBottom: 16 }}>{segBar<ReportPeriod>([['woche', 'Woche'], ['monat', 'Monat'], ['jahr', 'Jahr']], period, onSetPeriod)}</div>
 
       {done.length === 0 ? (
         <div style={{ fontSize: 13, color: C.muted, padding: '8px 0' }}>Keine erledigten Aufgaben in diesem Zeitraum.</div>
       ) : (
         <>
-          {/* ---- Prognose-Genauigkeit (Plan vs. Ist) ---- */}
-          <div style={{ fontSize: 11, letterSpacing: '.14em', textTransform: 'uppercase', color: C.greyFooter, fontWeight: 700 }}>Prognose</div>
-          <div style={{ display: 'flex', gap: 10, marginTop: 12 }}>
-            <div style={{ flex: 1, border: '1px solid #E1E5E8', background: C.lt1, padding: '12px 10px', textAlign: 'center' }}>
-              <div style={{ fontSize: 22, fontWeight: 300, color: C.greyFooter, fontVariantNumeric: 'tabular-nums', lineHeight: 1 }}>{fmtDur(totalPlanned)}</div>
-              <div style={{ fontSize: 10, letterSpacing: '.08em', textTransform: 'uppercase', color: C.greyFooter, marginTop: 5 }}>geplant</div>
+          {/* ---- Kopfzahl: Anzahl im Fokus ---- */}
+          <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 14 }}>
+            <div>
+              <div style={{ fontSize: 40, fontWeight: 300, color: C.accent1, fontVariantNumeric: 'tabular-nums', lineHeight: 1 }}>{done.length}</div>
+              <div style={{ fontSize: 11, letterSpacing: '.08em', textTransform: 'uppercase', color: C.greyFooter, marginTop: 4 }}>erledigte Aufgaben</div>
             </div>
-            <div style={{ flex: 1, border: '1px solid #E1E5E8', background: C.lt1, padding: '12px 10px', textAlign: 'center' }}>
-              <div style={{ fontSize: 22, fontWeight: 300, color: C.dk1, fontVariantNumeric: 'tabular-nums', lineHeight: 1 }}>{fmtDur(totalActual)}</div>
-              <div style={{ fontSize: 10, letterSpacing: '.08em', textTransform: 'uppercase', color: C.greyFooter, marginTop: 5 }}>benötigt</div>
-            </div>
-            <div style={{ flex: 1, border: '1px solid #E1E5E8', background: C.lt1, padding: '12px 10px', textAlign: 'center' }}>
-              <div style={{ fontSize: 22, fontWeight: 300, color: deviation > 0 ? C.critical : '#2E8B3D', fontVariantNumeric: 'tabular-nums', lineHeight: 1 }}>
-                {deviation > 0 ? '+' : ''}{deviation}%
-              </div>
-              <div style={{ fontSize: 10, letterSpacing: '.08em', textTransform: 'uppercase', color: C.greyFooter, marginTop: 5 }}>Abweichung</div>
+            <div style={{ textAlign: 'right' }}>
+              <div style={{ fontSize: 14, fontWeight: 700, color: C.dk1, fontVariantNumeric: 'tabular-nums' }}>{fmtDur(totalMin)} Std</div>
+              <div style={{ fontSize: 11, color: C.muted, fontVariantNumeric: 'tabular-nums' }}>Ø {fmtDur(avgMin)} / Aufgabe</div>
             </div>
           </div>
-          {timed.length > 0 ? (
-            <div style={{ fontSize: 12, color: C.greyFooter, marginTop: 10 }}>
-              <span style={{ color: '#2E8B3D', fontWeight: 700 }}>{onPlan}</span> im Plan ·{' '}
-              <span style={{ color: C.critical, fontWeight: 700 }}>{over}</span> überzogen ·{' '}
-              <span style={{ color: C.accent1, fontWeight: 700 }}>{under}</span> schneller
-              <span style={{ color: C.muted }}> &nbsp;(von {timed.length} mit Zeitmessung)</span>
-            </div>
-          ) : (
-            <div style={{ fontSize: 12, color: C.muted, marginTop: 10 }}>Noch keine Aufgabe mit Zeitmessung in diesem Zeitraum.</div>
-          )}
 
-          {/* ---- Durchsatz ---- */}
-          {sectionLabel('Durchsatz')}
-          <div style={{ display: 'flex', gap: 18, marginBottom: 14 }}>
-            <div>
-              <div style={{ fontSize: 24, fontWeight: 300, color: C.accent1, fontVariantNumeric: 'tabular-nums', lineHeight: 1 }}>{done.length}</div>
-              <div style={{ fontSize: 10, letterSpacing: '.08em', textTransform: 'uppercase', color: C.greyFooter, marginTop: 4 }}>erledigt</div>
+          {/* ---- Prognose (kompakt) ---- */}
+          <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
+            <div style={{ flex: 1, border: '1px solid #E1E5E8', background: C.lt1, padding: '8px 6px', textAlign: 'center' }}>
+              <div style={{ fontSize: 15, fontWeight: 700, color: C.greyFooter, fontVariantNumeric: 'tabular-nums' }}>{fmtDur(totalPlanned)}</div>
+              <div style={{ fontSize: 9, letterSpacing: '.06em', textTransform: 'uppercase', color: C.greyFooter }}>geplant</div>
             </div>
-            <div>
-              <div style={{ fontSize: 24, fontWeight: 300, color: C.accent1, fontVariantNumeric: 'tabular-nums', lineHeight: 1 }}>{fmtDur(totalActual)}</div>
-              <div style={{ fontSize: 10, letterSpacing: '.08em', textTransform: 'uppercase', color: C.greyFooter, marginTop: 4 }}>Std gesamt</div>
+            <div style={{ flex: 1, border: '1px solid #E1E5E8', background: C.lt1, padding: '8px 6px', textAlign: 'center' }}>
+              <div style={{ fontSize: 15, fontWeight: 700, color: C.dk1, fontVariantNumeric: 'tabular-nums' }}>{fmtDur(totalActual)}</div>
+              <div style={{ fontSize: 9, letterSpacing: '.06em', textTransform: 'uppercase', color: C.greyFooter }}>benötigt</div>
             </div>
-            <div>
-              <div style={{ fontSize: 24, fontWeight: 300, color: C.accent1, fontVariantNumeric: 'tabular-nums', lineHeight: 1 }}>{fmtDur(avgMin)}</div>
-              <div style={{ fontSize: 10, letterSpacing: '.08em', textTransform: 'uppercase', color: C.greyFooter, marginTop: 4 }}>Ø / Aufgabe</div>
+            <div style={{ flex: 1, border: '1px solid #E1E5E8', background: C.lt1, padding: '8px 6px', textAlign: 'center' }}>
+              <div style={{ fontSize: 15, fontWeight: 700, color: deviation > 0 ? C.critical : '#2E8B3D', fontVariantNumeric: 'tabular-nums' }}>{deviation > 0 ? '+' : ''}{deviation}%</div>
+              <div style={{ fontSize: 9, letterSpacing: '.06em', textTransform: 'uppercase', color: C.greyFooter }}>Abweichung</div>
             </div>
           </div>
-          <div style={{ display: 'flex', alignItems: 'flex-end', gap: 5, height: 130, paddingBottom: 2, borderBottom: '1px solid #EDF0F1' }}>
-            {buckets.map((b, i) => (
-              <div key={i} style={{ flex: '1 1 0', minWidth: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
-                <div style={{ width: '62%', minWidth: 7, maxWidth: 30, height: Math.round((b.hours / maxHours) * 110), background: b.hours > 0 ? C.accent1 : '#EDF0F1' }} title={`${fmtDur(Math.round(b.hours * 60))} h`} />
-                <div style={{ fontSize: 9, color: C.muted, whiteSpace: 'nowrap' }}>{b.label}</div>
+
+          {/* ---- Gruppierung nach Projekt / Kategorie (Fokus Anzahl) ---- */}
+          {sectionLabel('Verteilung')}
+          {segBar<GroupMode>([['project', 'Nach Projekt'], ['category', 'Nach Kategorie']], groupMode, (m) => { setGroupMode(m); setSelected(null); })}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 12 }}>
+            <button
+              type="button"
+              onClick={() => setSelected(null)}
+              style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', border: '1px solid ' + (activeSel ? '#E1E5E8' : C.accent1), background: activeSel ? C.lt1 : C.lt2, textAlign: 'left' }}
+            >
+              <span style={{ fontSize: 13, fontWeight: 700, color: C.dk1 }}>Alle</span>
+              <span style={{ marginLeft: 'auto', fontSize: 14, fontWeight: 700, color: C.dk1, fontVariantNumeric: 'tabular-nums' }}>{done.length}</span>
+            </button>
+            {groups.map((g) => {
+              const on = activeSel === g.key;
+              return (
+                <button
+                  key={g.key}
+                  type="button"
+                  onClick={() => setSelected(on ? null : g.key)}
+                  style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', border: '1px solid ' + (on ? C.accent1 : '#E1E5E8'), background: on ? C.lt2 : C.lt1, textAlign: 'left' }}
+                >
+                  <span style={{ width: 10, height: 10, flex: '0 0 auto', background: groupColor(g.key), borderRadius: 2 }} />
+                  <span style={{ fontSize: 13, fontWeight: 700, color: C.dk1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    {groupLabel(g.key)}
+                    {groupRemoved(g.key) && <span style={{ color: C.muted, fontWeight: 500 }}> (entfernt)</span>}
+                  </span>
+                  <span style={{ marginLeft: 'auto', flex: '0 0 auto', display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{ width: 64, height: 6, background: '#F0F2F3', position: 'relative', display: 'inline-block' }}>
+                      <span style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: Math.round((g.count / maxCount) * 100) + '%', background: groupColor(g.key) }} />
+                    </span>
+                    <span style={{ fontSize: 15, fontWeight: 700, color: C.dk1, fontVariantNumeric: 'tabular-nums', width: 26, textAlign: 'right' }}>{g.count}</span>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+
+          {/* ---- Aufgaben (Drill-down, sortierbar) ---- */}
+          {sectionLabel(activeSel ? `Aufgaben · ${groupLabel(activeSel)}` : 'Aufgaben')}
+          {segBar<ReportSort>([['importance', 'Wichtigkeit'], ['duration', 'Dauer'], ['date', 'Datum']], sortKey, setSortKey)}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 12 }}>
+            {list.map((t) => (
+              <div
+                key={t.id}
+                onClick={() => onEdit(t)}
+                style={{ border: '1px solid #E1E5E8', background: C.lt1, padding: '9px 11px', cursor: 'pointer' }}
+              >
+                <div style={{ fontSize: 14, fontWeight: 700, color: C.dk1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {t.title.trim() === '' ? '(ohne Titel)' : t.title}
+                </div>
+                <div style={{ fontSize: 11, color: C.muted, marginTop: 3, display: 'flex', flexWrap: 'wrap', gap: 8, fontVariantNumeric: 'tabular-nums' }}>
+                  <span>{projName(t.projectId)}{t.projectId && projById.get(t.projectId)?.archived ? ' (entfernt)' : ''}</span>
+                  <span>· Wicht {t.importance + 1}</span>
+                  <span>· Plan {fmtDur(t.plannedMin)}{t.actualMin != null ? ` · Ist ${fmtDur(t.actualMin)}` : ''}</span>
+                  {t.completedAt && <span>· {fmtDayShort(t.completedAt)}</span>}
+                </div>
               </div>
             ))}
           </div>
-
-          {/* ---- Kategorie-Verteilung ---- */}
-          {sectionLabel('Nach Kategorie')}
-          {catTotal === 0 ? (
-            <div style={{ fontSize: 13, color: C.muted, padding: '4px 0' }}>Keine gemessene Zeit in diesem Zeitraum.</div>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-              {catRows.map((r) => {
-                const pct = catTotal > 0 ? Math.round((r.min / catTotal) * 100) : 0;
-                return (
-                  <div key={r.cat}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-                      <span style={{ width: 10, height: 10, flex: '0 0 auto', background: CATEGORY_COLORS[r.cat] }} />
-                      <span style={{ fontSize: 14, fontWeight: 700, color: C.dk1 }}>{CATEGORY_LABELS[r.cat]}</span>
-                      <span style={{ marginLeft: 'auto', fontSize: 13, fontWeight: 700, color: C.dk1, fontVariantNumeric: 'tabular-nums' }}>{fmtDur(r.min)}</span>
-                      <span style={{ fontSize: 12, color: C.muted, width: 38, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{pct}%</span>
-                    </div>
-                    <div style={{ flex: '1 1 auto', height: 8, background: '#F0F2F3', position: 'relative' }}>
-                      <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: pct + '%', background: CATEGORY_COLORS[r.cat] }} />
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
         </>
       )}
     </section>
@@ -1010,7 +966,7 @@ function AdminView(props: {
   const { state: s, onUpdateName, onMoveProject, onDeleteProject, onAddProject, accountEmail, onLogout } = props;
 
   const section = (cat: TodoCategory) => {
-    const rows = s.projects.filter((p) => p.category === cat).sort((a, b) => a.sort - b.sort || a.name.localeCompare(b.name, 'de'));
+    const rows = s.projects.filter((p) => p.category === cat && !p.archived).sort((a, b) => a.sort - b.sort || a.name.localeCompare(b.name, 'de'));
     return (
       <div key={cat} style={{ marginBottom: 22 }}>
         <div style={{ fontSize: 11, letterSpacing: '.12em', textTransform: 'uppercase', color: C.accent1, fontWeight: 700, marginBottom: 8 }}>
@@ -1780,7 +1736,7 @@ function TodoSheet(props: {
           >
             <option value="">— Projekt wählen —</option>
             {(['projekt', 'akquise', 'intern'] as TodoCategory[]).map((cat) => {
-              const ps = projects.filter((p) => p.category === cat).sort((a, b) => a.sort - b.sort || a.name.localeCompare(b.name, 'de'));
+              const ps = projects.filter((p) => p.category === cat && !p.archived).sort((a, b) => a.sort - b.sort || a.name.localeCompare(b.name, 'de'));
               if (ps.length === 0) return null;
               return (
                 <optgroup key={cat} label={CATEGORY_LABELS[cat]}>
@@ -1790,6 +1746,11 @@ function TodoSheet(props: {
                 </optgroup>
               );
             })}
+            {selProject && selProject.archived && (
+              <optgroup label="Entfernt">
+                <option value={selProject.id}>{selProject.name} (entfernt)</option>
+              </optgroup>
+            )}
           </select>
           {!selProject && (
             <div style={{ fontSize: 11, color: C.critical, marginTop: 6 }}>Pflichtfeld – die Aufgabe wird der Kategorie des Projekts zugeordnet.</div>
