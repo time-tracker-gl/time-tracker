@@ -16,6 +16,7 @@ interface DbProject {
   color: string;
   category?: string | null;
   sort?: number | null;
+  archived?: boolean | null;
 }
 interface DbSegment {
   id: string;
@@ -59,6 +60,7 @@ export async function loadProjects(): Promise<Project[]> {
     color: p.color,
     category: (p.category ?? 'projekt') as TodoCategory,
     sort: p.sort ?? 0,
+    archived: p.archived ?? false,
   }));
 }
 
@@ -93,7 +95,7 @@ export async function seedDefaultProjects(defaults: Project[]): Promise<void> {
   if (!supabase || defaults.length === 0) return;
   const { error } = await supabase
     .from('projects')
-    .insert(defaults.map((p) => ({ id: p.id, code: p.code ?? '', name: p.name, color: p.color, category: p.category, sort: p.sort })));
+    .insert(defaults.map((p) => ({ id: p.id, code: p.code ?? '', name: p.name, color: p.color, category: p.category, sort: p.sort, archived: p.archived ?? false })));
   if (error) throw error;
 }
 
@@ -111,7 +113,7 @@ export async function syncProjects(projects: Project[]): Promise<void> {
   if (projects.length) {
     const { error } = await supabase
       .from('projects')
-      .upsert(projects.map((p) => ({ id: p.id, code: p.code ?? '', name: p.name, color: p.color, category: p.category, sort: p.sort })));
+      .upsert(projects.map((p) => ({ id: p.id, code: p.code ?? '', name: p.name, color: p.color, category: p.category, sort: p.sort, archived: p.archived ?? false })));
     if (error) throw error;
   }
 }
