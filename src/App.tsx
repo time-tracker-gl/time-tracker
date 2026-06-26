@@ -775,15 +775,8 @@ function ConfirmDialog(props: { message: string; confirmLabel: string; onConfirm
 }
 
 /* ======================= REPORTING ======================= */
-/** Fixed colours for the three task categories in the Reporting charts. */
-const CATEGORY_COLORS: Record<TodoCategory, string> = {
-  projekt: '#2B5FAE',
-  akquise: '#E8772E',
-  intern: '#7B3FB8',
-};
-
-type GroupMode = 'project' | 'category';
 type ReportSort = 'importance' | 'duration' | 'date';
+type CatFilter = 'all' | TodoCategory;
 const NO_PROJECT = '__none__';
 
 function ReportView(props: {
@@ -794,8 +787,8 @@ function ReportView(props: {
   onEdit: (t: Todo) => void;
 }) {
   const { state: s, period, onSetPeriod, today, onEdit } = props;
-  const [groupMode, setGroupMode] = useState<GroupMode>('project');
-  const [selected, setSelected] = useState<string | null>(null);
+  const [catFilter, setCatFilter] = useState<CatFilter>('all');
+  const [projFilter, setProjFilter] = useState<string | null>(null);
   const [sortKey, setSortKey] = useState<ReportSort>('date');
 
   const { from, to } = periodRange(period, s.custFrom, s.custTo, today);
@@ -805,44 +798,37 @@ function ReportView(props: {
   // resolve project names incl. soft-deleted ("archived") ones, so history stays visible
   const projById = new Map(s.projects.map((p) => [p.id, p] as const));
   const projName = (id: string | null) => (id ? projById.get(id)?.name : null) || '(kein Projekt)';
-  const groupOf = (t: Todo) => (groupMode === 'category' ? safeCategory(t.category) : t.projectId ?? NO_PROJECT);
-  const groupLabel = (key: string) => (groupMode === 'category' ? CATEGORY_LABELS[key as TodoCategory] : projName(key === NO_PROJECT ? null : key));
-  const groupColor = (key: string) => (groupMode === 'category' ? CATEGORY_COLORS[key as TodoCategory] : projById.get(key)?.color ?? '#9AA7B0');
-  const groupRemoved = (key: string) => groupMode === 'project' && key !== NO_PROJECT && !!projById.get(key)?.archived;
 
-  const gmap = new Map<string, { count: number; min: number }>();
-  for (const t of done) {
-    const k = groupOf(t);
-    const g = gmap.get(k) ?? { count: 0, min: 0 };
-    g.count += 1;
-    g.min += t.actualMin ?? 0;
-    gmap.set(k, g);
+  // tasks of the chosen category (or all)
+  const catTasks = catFilter === 'all' ? done : done.filter((t) => safeCategory(t.category) === catFilter);
+
+  // project breakdown within the selected category
+  const pmap = new Map<string, number>();
+  if (catFilter !== 'all') for (const t of catTasks) {
+    const k = t.projectId ?? NO_PROJECT;
+    pmap.set(k, (pmap.get(k) ?? 0) + 1);
   }
-  const groups = [...gmap.entries()].map(([key, v]) => ({ key, ...v })).sort((a, b) => b.count - a.count || b.min - a.min);
-  const activeSel = selected && gmap.has(selected) ? selected : null;
-  const maxCount = Math.max(1, ...groups.map((g) => g.count));
+  const projGroups = [...pmap.entries()].map(([key, count]) => ({ key, count })).sort((a, b) => b.count - a.count);
+  const maxCount = Math.max(1, ...projGroups.map((g) => g.count));
+  const activeProj = projFilter && pmap.has(projFilter) ? projFilter : null;
 
+  // the task list shown below (category + optional project filter)
+  const shown = activeProj ? catTasks.filter((t) => (t.projectId ?? NO_PROJECT) === activeProj) : catTasks;
   const dur = (t: Todo) => t.actualMin ?? t.plannedMin;
-  const list = done
-    .filter((t) => !activeSel || groupOf(t) === activeSel)
-    .slice()
-    .sort((a, b) => {
-      if (sortKey === 'importance') return a.importance - b.importance || dur(b) - dur(a);
-      if (sortKey === 'duration') return dur(b) - dur(a);
-      return a.completedAt! < b.completedAt! ? 1 : a.completedAt! > b.completedAt! ? -1 : 0;
-    });
+  const list = shown.slice().sort((a, b) => {
+    if (sortKey === 'importance') return a.importance - b.importance || dur(b) - dur(a);
+    if (sortKey === 'duration') return dur(b) - dur(a);
+    return a.completedAt! < b.completedAt! ? 1 : a.completedAt! > b.completedAt! ? -1 : 0;
+  });
 
-  const totalMin = done.reduce((a, t) => a + (t.actualMin ?? 0), 0);
-  const timed = done.filter((t) => t.actualMin != null);
-  const totalPlanned = timed.reduce((a, t) => a + t.plannedMin, 0);
-  const totalActual = timed.reduce((a, t) => a + (t.actualMin ?? 0), 0);
-  const deviation = totalPlanned > 0 ? Math.round(((totalActual - totalPlanned) / totalPlanned) * 100) : 0;
-  const avgMin = timed.length > 0 ? Math.round(totalActual / timed.length) : 0;
+  const totalMin = shown.reduce((a, t) => a + (t.actualMin ?? 0), 0);
+  const timedCount = shown.filter((t) => t.actualMin != null).length;
+  const avgMin = timedCount > 0 ? Math.round(totalMin / timedCount) : 0;
 
   const segBar = <T extends string>(opts: [T, string][], val: T, set: (v: T) => void) => (
     <div style={{ display: 'flex', border: '1px solid #D5DBDF', background: C.lt2, overflow: 'hidden' }}>
       {opts.map(([k, lbl]) => (
-        <button key={k} type="button" onClick={() => set(k)} style={{ flex: '1 1 auto', padding: '8px 4px', fontSize: 12, fontWeight: 700, textAlign: 'center', color: val === k ? C.lt1 : '#5E7184', background: val === k ? C.accent1 : 'transparent' }}>
+        <button key={k} type="button" onClick={() => set(k)} style={{ flex: '1 1 auto', padding: '8px 3px', fontSize: 12, fontWeight: 700, textAlign: 'center', color: val === k ? C.lt1 : '#5E7184', background: val === k ? C.accent1 : 'transparent' }}>
           {lbl}
         </button>
       ))}
@@ -860,10 +846,10 @@ function ReportView(props: {
         <div style={{ fontSize: 13, color: C.muted, padding: '8px 0' }}>Keine erledigten Aufgaben in diesem Zeitraum.</div>
       ) : (
         <>
-          {/* ---- Kopfzahl: Anzahl im Fokus ---- */}
+          {/* ---- Kopfzahl: Anzahl im Fokus (folgt dem Filter) ---- */}
           <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 14 }}>
             <div>
-              <div style={{ fontSize: 40, fontWeight: 300, color: C.accent1, fontVariantNumeric: 'tabular-nums', lineHeight: 1 }}>{done.length}</div>
+              <div style={{ fontSize: 40, fontWeight: 300, color: C.accent1, fontVariantNumeric: 'tabular-nums', lineHeight: 1 }}>{shown.length}</div>
               <div style={{ fontSize: 11, letterSpacing: '.08em', textTransform: 'uppercase', color: C.greyFooter, marginTop: 4 }}>erledigte Aufgaben</div>
             </div>
             <div style={{ textAlign: 'right' }}>
@@ -872,61 +858,45 @@ function ReportView(props: {
             </div>
           </div>
 
-          {/* ---- Prognose (kompakt) ---- */}
-          <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
-            <div style={{ flex: 1, border: '1px solid #E1E5E8', background: C.lt1, padding: '8px 6px', textAlign: 'center' }}>
-              <div style={{ fontSize: 15, fontWeight: 700, color: C.greyFooter, fontVariantNumeric: 'tabular-nums' }}>{fmtDur(totalPlanned)}</div>
-              <div style={{ fontSize: 9, letterSpacing: '.06em', textTransform: 'uppercase', color: C.greyFooter }}>geplant</div>
-            </div>
-            <div style={{ flex: 1, border: '1px solid #E1E5E8', background: C.lt1, padding: '8px 6px', textAlign: 'center' }}>
-              <div style={{ fontSize: 15, fontWeight: 700, color: C.dk1, fontVariantNumeric: 'tabular-nums' }}>{fmtDur(totalActual)}</div>
-              <div style={{ fontSize: 9, letterSpacing: '.06em', textTransform: 'uppercase', color: C.greyFooter }}>benötigt</div>
-            </div>
-            <div style={{ flex: 1, border: '1px solid #E1E5E8', background: C.lt1, padding: '8px 6px', textAlign: 'center' }}>
-              <div style={{ fontSize: 15, fontWeight: 700, color: deviation > 0 ? C.critical : '#2E8B3D', fontVariantNumeric: 'tabular-nums' }}>{deviation > 0 ? '+' : ''}{deviation}%</div>
-              <div style={{ fontSize: 9, letterSpacing: '.06em', textTransform: 'uppercase', color: C.greyFooter }}>Abweichung</div>
-            </div>
-          </div>
-
-          {/* ---- Gruppierung nach Projekt / Kategorie (Fokus Anzahl) ---- */}
+          {/* ---- Verteilung: feste Kategorie-Filter ---- */}
           {sectionLabel('Verteilung')}
-          {segBar<GroupMode>([['project', 'Nach Projekt'], ['category', 'Nach Kategorie']], groupMode, (m) => { setGroupMode(m); setSelected(null); })}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 12 }}>
-            <button
-              type="button"
-              onClick={() => setSelected(null)}
-              style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', border: '1px solid ' + (activeSel ? '#E1E5E8' : C.accent1), background: activeSel ? C.lt1 : C.lt2, textAlign: 'left' }}
-            >
-              <span style={{ fontSize: 13, fontWeight: 700, color: C.dk1 }}>Alle</span>
-              <span style={{ marginLeft: 'auto', fontSize: 14, fontWeight: 700, color: C.dk1, fontVariantNumeric: 'tabular-nums' }}>{done.length}</span>
-            </button>
-            {groups.map((g) => {
-              const on = activeSel === g.key;
-              return (
-                <button
-                  key={g.key}
-                  type="button"
-                  onClick={() => setSelected(on ? null : g.key)}
-                  style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', border: '1px solid ' + (on ? C.accent1 : '#E1E5E8'), background: on ? C.lt2 : C.lt1, textAlign: 'left' }}
-                >
-                  <span style={{ width: 10, height: 10, flex: '0 0 auto', background: groupColor(g.key), borderRadius: 2 }} />
-                  <span style={{ fontSize: 13, fontWeight: 700, color: C.dk1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                    {groupLabel(g.key)}
-                    {groupRemoved(g.key) && <span style={{ color: C.muted, fontWeight: 500 }}> (entfernt)</span>}
-                  </span>
-                  <span style={{ marginLeft: 'auto', flex: '0 0 auto', display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span style={{ width: 64, height: 6, background: '#F0F2F3', position: 'relative', display: 'inline-block' }}>
-                      <span style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: Math.round((g.count / maxCount) * 100) + '%', background: groupColor(g.key) }} />
-                    </span>
-                    <span style={{ fontSize: 15, fontWeight: 700, color: C.dk1, fontVariantNumeric: 'tabular-nums', width: 26, textAlign: 'right' }}>{g.count}</span>
-                  </span>
-                </button>
-              );
-            })}
-          </div>
+          {segBar<CatFilter>([['all', 'Alle'], ['projekt', 'Projekt'], ['akquise', 'Akquise'], ['intern', 'Intern']], catFilter, (c) => { setCatFilter(c); setProjFilter(null); })}
+
+          {catFilter !== 'all' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 12 }}>
+              {projGroups.length === 0 ? (
+                <div style={{ fontSize: 13, color: C.muted, padding: '2px 0' }}>Keine Aufgaben in dieser Kategorie.</div>
+              ) : (
+                projGroups.map((g) => {
+                  const on = activeProj === g.key;
+                  const p = g.key === NO_PROJECT ? null : projById.get(g.key);
+                  return (
+                    <button
+                      key={g.key}
+                      type="button"
+                      onClick={() => setProjFilter(on ? null : g.key)}
+                      style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', border: '1px solid ' + (on ? C.accent1 : '#E1E5E8'), background: on ? C.lt2 : C.lt1, textAlign: 'left' }}
+                    >
+                      <span style={{ width: 10, height: 10, flex: '0 0 auto', background: p?.color ?? '#9AA7B0', borderRadius: 2 }} />
+                      <span style={{ fontSize: 13, fontWeight: 700, color: C.dk1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {projName(g.key === NO_PROJECT ? null : g.key)}
+                        {p?.archived && <span style={{ color: C.muted, fontWeight: 500 }}> (entfernt)</span>}
+                      </span>
+                      <span style={{ marginLeft: 'auto', flex: '0 0 auto', display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <span style={{ width: 64, height: 6, background: '#F0F2F3', position: 'relative', display: 'inline-block' }}>
+                          <span style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: Math.round((g.count / maxCount) * 100) + '%', background: p?.color ?? '#9AA7B0' }} />
+                        </span>
+                        <span style={{ fontSize: 15, fontWeight: 700, color: C.dk1, fontVariantNumeric: 'tabular-nums', width: 26, textAlign: 'right' }}>{g.count}</span>
+                      </span>
+                    </button>
+                  );
+                })
+              )}
+            </div>
+          )}
 
           {/* ---- Aufgaben (Drill-down, sortierbar) ---- */}
-          {sectionLabel(activeSel ? `Aufgaben · ${groupLabel(activeSel)}` : 'Aufgaben')}
+          {sectionLabel(activeProj ? `Aufgaben · ${projName(activeProj === NO_PROJECT ? null : activeProj)}` : 'Aufgaben')}
           {segBar<ReportSort>([['importance', 'Wichtigkeit'], ['duration', 'Dauer'], ['date', 'Datum']], sortKey, setSortKey)}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 12 }}>
             {list.map((t) => (
