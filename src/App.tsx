@@ -804,7 +804,7 @@ function ReportView(props: {
 
   // project breakdown within the selected category
   const pmap = new Map<string, number>();
-  if (catFilter !== 'all') for (const t of catTasks) {
+  for (const t of catTasks) {
     const k = t.projectId ?? NO_PROJECT;
     pmap.set(k, (pmap.get(k) ?? 0) + 1);
   }
@@ -862,10 +862,10 @@ function ReportView(props: {
           {sectionLabel('Verteilung')}
           {segBar<CatFilter>([['all', 'Alle'], ['projekt', 'Projekt'], ['akquise', 'Akquise'], ['intern', 'Intern']], catFilter, (c) => { setCatFilter(c); setProjFilter(null); })}
 
-          {catFilter !== 'all' && (
+          {(
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 12 }}>
               {projGroups.length === 0 ? (
-                <div style={{ fontSize: 13, color: C.muted, padding: '2px 0' }}>Keine Aufgaben in dieser Kategorie.</div>
+                <div style={{ fontSize: 13, color: C.muted, padding: '2px 0' }}>Keine Aufgaben in diesem Filter.</div>
               ) : (
                 projGroups.map((g) => {
                   const on = activeProj === g.key;
