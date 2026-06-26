@@ -209,9 +209,6 @@ export default function App() {
   const stateRef = useRef<AppState | null>(null);
   const reloadRef = useRef<() => void>(() => {});
 
-  // Archive (completed tasks) time-slice filter (Woche/Monat/Jahr).
-  const [archivePeriod, setArchivePeriod] = useState<ReportPeriod>('monat');
-
   // Running focus countdown (started from the task list with the Play button).
   const [run, setRun] = useState<RunSession | null>(loadRun);
   // Daily-Tasks editor sheet: null = closed, 'new' = create, Todo = edit.
@@ -529,11 +526,6 @@ export default function App() {
   function archiveTodo(id: string) {
     setState((s) => ({ todos: s.todos.map((t) => (t.id === id ? { ...t, archived: true, completedAt: localISODate() } : t)) }));
   }
-  /** Restore an archived task back into the active Daily-Tasks list (drops its
-   *  recorded times so a fresh run can be measured). */
-  function unarchiveTodo(id: string) {
-    setState((s) => ({ todos: s.todos.map((t) => (t.id === id ? { ...t, archived: false, actualMin: null, completedAt: null } : t)) }));
-  }
 
   // ---------- focus countdown (started from the task list) ----------
   /** Start the focus countdown for a task: shows the planned time counting down. */
@@ -571,7 +563,6 @@ export default function App() {
   const isReport = s.tab === 'report';
   const isTasks = s.tab === 'tasks';
   const isAdmin = s.tab === 'admin';
-  const isArchiv = s.tab === 'archiv';
   const today = new Date();
   const dateText = today.toLocaleDateString('de-DE', { weekday: 'short', day: 'numeric', month: 'long' });
   const clockText = fmtClock(vNow);
@@ -700,17 +691,6 @@ export default function App() {
               onAddProject={addProject}
               accountEmail={isSupabaseConfigured ? userEmail : null}
               onLogout={logout}
-            />
-          )}
-
-          {isArchiv && (
-            <ArchiveView
-              state={s}
-              period={archivePeriod}
-              onSetPeriod={setArchivePeriod}
-              today={today}
-              onEdit={(t) => setTodoSheet(t)}
-              onRestore={unarchiveTodo}
             />
           )}
         </main>
@@ -1034,15 +1014,9 @@ function BottomNav({ tab, onSelect }: { tab: Tab; onSelect: (t: Tab) => void }) 
       <path d="M9 6h11M9 12h11M9 18h11M4 6l1 1 2-2M4 12l1 1 2-2M4 18l1 1 2-2" />
     </svg>
   );
-  const archiveIcon = (
-    <svg width={19} height={19} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" style={{ display: 'block' }}>
-      <path d="M3 4h18v4H3zM5 8v12h14V8M9 12h6" />
-    </svg>
-  );
   const items: [Tab, string, React.ReactNode][] = [
     ['tasks', 'Daily Tasks', checklist],
     ['report', 'Reporting', '▥'],
-    ['archiv', 'Archiv', archiveIcon],
     ['admin', 'Admin', wrench],
   ];
   return (
@@ -1450,128 +1424,10 @@ function DailyTasksView(props: {
   );
 }
 
-/* ======================= ARCHIV ======================= */
 /** German short day label from a YYYY-MM-DD key, e.g. "Mi., 17.06.". */
 function fmtDayShort(day: string): string {
   const [y, m, d] = day.split('-').map(Number);
   return new Date(y, m - 1, d).toLocaleDateString('de-DE', { weekday: 'short', day: '2-digit', month: '2-digit' });
-}
-
-function ArchiveView(props: {
-  state: AppState;
-  period: ReportPeriod;
-  onSetPeriod: (p: ReportPeriod) => void;
-  today: Date;
-  onEdit: (t: Todo) => void;
-  onRestore: (id: string) => void;
-}) {
-  const { state: s, period, onSetPeriod, today, onEdit, onRestore } = props;
-  const archived = s.todos.filter((t) => t.archived);
-
-  // Filter by completion day within the selected slice. Legacy tasks without a
-  // completion date are always shown (sorted last) so nothing gets lost.
-  const { from, to } = periodRange(period, s.custFrom, s.custTo, today);
-  const shown = archived.filter((t) => !t.completedAt || (t.completedAt >= from && t.completedAt <= to));
-  shown.sort((a, b) => {
-    if (a.completedAt && b.completedAt) return a.completedAt < b.completedAt ? 1 : a.completedAt > b.completedAt ? -1 : 0;
-    if (a.completedAt) return -1;
-    if (b.completedAt) return 1;
-    return 0;
-  });
-
-  const totalPlanned = shown.reduce((a, t) => a + (t.actualMin != null ? t.plannedMin : 0), 0);
-  const totalActual = shown.reduce((a, t) => a + (t.actualMin ?? 0), 0);
-
-  const periodDefs: [ReportPeriod, string][] = [
-    ['woche', 'Woche'],
-    ['monat', 'Monat'],
-    ['jahr', 'Jahr'],
-  ];
-
-  return (
-    <section style={{ padding: '18px 20px 36px' }}>
-      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 14, marginBottom: 16 }}>
-        <div>
-          <div style={{ fontSize: 11, letterSpacing: '.14em', textTransform: 'uppercase', color: C.greyFooter, fontWeight: 700 }}>Archiv</div>
-          <div style={{ fontSize: 13, color: C.greyFooter, marginTop: 3 }}>Erledigte Aufgaben ({shown.length})</div>
-        </div>
-        <div style={{ textAlign: 'right', flex: '0 0 auto' }}>
-          <div style={{ fontSize: 28, fontWeight: 300, color: C.accent1, fontVariantNumeric: 'tabular-nums', lineHeight: 1 }}>{fmtDur(totalActual)}</div>
-          <div style={{ fontSize: 10, letterSpacing: '.1em', textTransform: 'uppercase', color: C.greyFooter }}>Benötigt (Plan {fmtDur(totalPlanned)})</div>
-        </div>
-      </div>
-
-      <div style={{ display: 'flex', border: '1px solid #D5DBDF', background: C.lt2, marginBottom: 20, overflow: 'hidden' }}>
-        {periodDefs.map(([k, label]) => (
-          <button
-            key={k}
-            type="button"
-            onClick={() => onSetPeriod(k)}
-            style={{ flex: '1 1 auto', padding: '9px 4px', fontSize: 12, fontWeight: 700, textAlign: 'center', color: period === k ? C.lt1 : '#5E7184', background: period === k ? C.accent1 : 'transparent' }}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-
-      {shown.length === 0 ? (
-        <div style={{ fontSize: 13, color: C.muted, padding: '8px 0' }}>Keine erledigten Aufgaben in diesem Zeitraum.</div>
-      ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {shown.map((t) => {
-            const items = (t.checklist ?? []).filter((c) => c.text.trim() !== '');
-            const done = items.filter((c) => c.done).length;
-            const timed = t.actualMin != null;
-            const diff = timed ? t.actualMin! - t.plannedMin : 0;
-            const diffColor = diff > 0 ? C.critical : '#2E8B3D';
-            return (
-              <div
-                key={t.id}
-                onClick={() => onEdit(t)}
-                style={{ display: 'flex', alignItems: 'center', gap: 10, border: '1px solid #E1E5E8', background: C.lt1, padding: '10px 12px', cursor: 'pointer' }}
-              >
-                <div style={{ flex: '1 1 auto', minWidth: 0 }}>
-                  <div style={{ fontSize: 14, fontWeight: 700, color: C.dk1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                    {t.title.trim() === '' ? '(ohne Titel)' : t.title}
-                  </div>
-                  <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>
-                    {CATEGORY_LABELS[t.category]}
-                    {t.completedAt && <span> &nbsp;·&nbsp; {fmtDayShort(t.completedAt)}</span>}
-                    {items.length > 0 && <span> &nbsp;·&nbsp; ✓ {done}/{items.length}</span>}
-                  </div>
-                  <div style={{ fontSize: 12, marginTop: 4, fontVariantNumeric: 'tabular-nums' }}>
-                    <span style={{ color: C.greyFooter }}>Plan {fmtDur(t.plannedMin)}</span>
-                    {timed ? (
-                      <>
-                        <span style={{ color: C.greyFooter }}> &nbsp;·&nbsp; </span>
-                        <span style={{ color: C.dk1, fontWeight: 700 }}>Ist {fmtDur(t.actualMin!)}</span>
-                        {diff !== 0 && (
-                          <span style={{ color: diffColor, fontWeight: 700 }}> &nbsp;({diff > 0 ? '+' : '−'}{fmtDur(Math.abs(diff))})</span>
-                        )}
-                      </>
-                    ) : (
-                      <span style={{ color: C.muted }}> &nbsp;·&nbsp; ohne Zeitmessung</span>
-                    )}
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onRestore(t.id);
-                  }}
-                  title="Wiederherstellen – zurück in die Aufgabenliste"
-                  style={{ flex: '0 0 auto', padding: '8px 12px', border: '1px solid ' + C.accent1, background: C.lt1, color: C.accent1, fontSize: 12, fontWeight: 700, letterSpacing: '.04em', whiteSpace: 'nowrap' }}
-                >
-                  Wiederherstellen
-                </button>
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </section>
-  );
 }
 
 /** Light tint applied to a whole row when the task is "im Zug erledigbar". */
